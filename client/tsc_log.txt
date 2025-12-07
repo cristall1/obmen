@@ -1,0 +1,11 @@
+src/components/AppShell.tsx(18,69): error TS6133: 'hasAccount' is declared but its value is never read.
+src/components/ExchangerInbox.tsx(4,10): error TS6133: 'ChevronRight' is declared but its value is never read.
+src/components/ExchangerInbox.tsx(8,1): error TS6133: 'motion' is declared but its value is never read.
+src/components/Offers.tsx(8,29): error TS6133: 'role' is declared but its value is never read.
+src/components/Onboarding.tsx(1,1): error TS6133: 'React' is declared but its value is never read.
+src/components/Profile.tsx(4,1): error TS6133: 'Language' is declared but its value is never read.
+src/components/Status.tsx(21,27): error TS6133: 'index' is declared but its value is never read.
+src/components/TelegramHandoff.tsx(4,18): error TS6133: 'AnimatePresence' is declared but its value is never read.
+src/components/ui/badge.tsx(1,40): error TS2307: Cannot find module 'class-variance-authority' or its corresponding type declarations.
+src/components/ui/button.tsx(2,40): error TS2307: Cannot find module 'class-variance-authority' or its corresponding type declarations.
+src/hooks/useStore.ts(209,31): error TS6133: 'state' is declared but its value is never read.

@@ -1,0 +1,20 @@
+# Logs
+*.log
+*.txt
+!README.md
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.env
+*.db
+
+# Node
+node_modules/
+dist/
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
