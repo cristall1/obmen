@@ -78,6 +78,7 @@ async def handle_register(request):
     nickname = data.get('nickname', '').strip()
     name = data.get('name', '').strip()
     password = data.get('password', '')
+    telegram_id = data.get('telegram_id')  # From Telegram WebApp initData
     
     if not nickname or len(nickname) < 3:
         return web.json_response({'error': 'nickname_too_short'}, status=400)
@@ -91,6 +92,23 @@ async def handle_register(request):
         return web.json_response(result, status=400)
     
     logging.info(f"New account registered: {nickname}, code: {result['code']}")
+    
+    # AUTO-SEND code to Telegram if telegram_id provided
+    if telegram_id:
+        bot = request.app.get('bot')
+        if bot:
+            try:
+                await bot.send_message(
+                    int(telegram_id),
+                    f"🔐 <b>NellX - Код подтверждения</b>\n\n"
+                    f"Ваш код: <code>{result['code']}</code>\n\n"
+                    f"Введите этот код на сайте для завершения регистрации.",
+                    parse_mode="HTML"
+                )
+                logging.info(f"Verification code sent to {telegram_id}")
+            except Exception as e:
+                logging.error(f"Failed to send code to {telegram_id}: {e}")
+    
     return web.json_response(result)
 
 @routes.post('/api/auth/login')
@@ -117,6 +135,35 @@ async def handle_check_verified(request):
     from bot.database.database import check_code_verified
     result = await check_code_verified(code)
     return web.json_response(result)
+
+@routes.post('/api/auth/request-seller-code')
+async def handle_request_seller_code(request):
+    """Request seller code - auto-sends to Telegram"""
+    data = await request.json()
+    telegram_id = data.get('telegram_id')
+    
+    if not telegram_id:
+        return web.json_response({'error': 'missing_telegram_id'}, status=400)
+    
+    from bot.database.database import generate_seller_code
+    code = await generate_seller_code(int(telegram_id))
+    
+    # AUTO-SEND code to Telegram
+    bot = request.app.get('bot')
+    if bot:
+        try:
+            await bot.send_message(
+                int(telegram_id),
+                f"🏪 <b>NellX - Код обменника</b>\n\n"
+                f"Ваш код: <code>{code}</code>\n\n"
+                f"Введите этот код на сайте чтобы стать обменником.",
+                parse_mode="HTML"
+            )
+            logging.info(f"Seller code sent to {telegram_id}")
+        except Exception as e:
+            logging.error(f"Failed to send seller code to {telegram_id}: {e}")
+    
+    return web.json_response({'success': True, 'code_sent': True})
 
 @routes.post('/api/auth/verify-seller')
 async def handle_verify_seller(request):

@@ -10,9 +10,7 @@ def get_main_menu_keyboard(user_id: int = None, lang: str = "ru"):
             "lang": "🌐 Язык",
             "admin": "🛠 Админка",
             "contact": "✉️ Связь",
-            "app": "📱 P2P Обмен",
-            "order": "💰 Заявка",
-            "verify": "✅ Подтвердить код",
+            "app": "📱 Открыть NellX",
         },
         "uz": {
             "rates": "💱 Kurslar",
@@ -20,9 +18,7 @@ def get_main_menu_keyboard(user_id: int = None, lang: str = "ru"):
             "lang": "🌐 Til",
             "admin": "🛠 Admin",
             "contact": "✉️ Aloqa",
-            "app": "📱 P2P",
-            "order": "💰 Buyurtma",
-            "verify": "✅ Kodni tasdiqlash",
+            "app": "📱 NellX ochish",
         },
     }
 
@@ -30,8 +26,6 @@ def get_main_menu_keyboard(user_id: int = None, lang: str = "ru"):
 
     buttons = [
         [InlineKeyboardButton(text=t["app"], web_app=WebAppInfo(url=WEBAPP_URL))],
-        [InlineKeyboardButton(text=t["order"], callback_data="create_order"),
-         InlineKeyboardButton(text=t["verify"], callback_data="verify_code")],
         [InlineKeyboardButton(text=t["rates"], callback_data="menu_analysis_dashboard"),
          InlineKeyboardButton(text=t["calc"], callback_data="menu_calculator")],
         [InlineKeyboardButton(text=t["lang"], callback_data="menu_language"),

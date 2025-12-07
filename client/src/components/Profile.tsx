@@ -87,10 +87,36 @@ export function Profile() {
   const [sellerError, setSellerError] = useState('');
   const [isVerifyingSeller, setIsVerifyingSeller] = useState(false);
   const [showConfetti, setShowConfetti] = useState(false);
+  const [isRequestingCode, setIsRequestingCode] = useState(false);
 
   React.useEffect(() => {
     fetchStats();
   }, []);
+
+  // Auto-request seller code when modal opens
+  const handleOpenSellerModal = async () => {
+    setShowSellerModal(true);
+    setSellerCode('');
+    setSellerError('');
+    setIsRequestingCode(true);
+
+    // Get Telegram user ID
+    const tgUser = (window as any)?.Telegram?.WebApp?.initDataUnsafe?.user;
+    const telegramId = tgUser?.id;
+
+    if (telegramId) {
+      try {
+        await fetch(`${API_BASE}/api/auth/request-seller-code`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ telegram_id: telegramId })
+        });
+      } catch (e) {
+        console.error('Failed to request seller code');
+      }
+    }
+    setIsRequestingCode(false);
+  };
 
   const handleSave = async () => {
     setIsSaving(true);
@@ -175,7 +201,7 @@ export function Profile() {
           {/* Become Seller Button */}
           {role !== 'exchanger' && (
             <button
-              onClick={() => setShowSellerModal(true)}
+              onClick={handleOpenSellerModal}
               className="w-full py-3.5 bg-gradient-to-r from-amber-500 to-orange-500 text-white rounded-xl font-medium flex items-center justify-center gap-2 shadow-lg hover:shadow-xl transition-shadow"
             >
               <Store size={18} />
@@ -275,18 +301,22 @@ export function Profile() {
             >
               <div className="text-center mb-4">
                 <div className="w-14 h-14 rounded-full bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center mx-auto mb-3">
-                  <Sparkles className="text-white" size={24} />
+                  {isRequestingCode ? (
+                    <Loader2 className="text-white animate-spin" size={24} />
+                  ) : (
+                    <Sparkles className="text-white" size={24} />
+                  )}
                 </div>
                 <h3 className="text-lg font-bold">Стать обменником</h3>
                 <p className="text-sm text-gray-500 mt-1">
-                  Получите код в боте командой /seller_code
+                  {isRequestingCode ? 'Отправляем код...' : 'Код отправлен в ваш Telegram'}
                 </p>
               </div>
 
               <Input
                 value={sellerCode}
                 onChange={(e) => setSellerCode(e.target.value.toUpperCase())}
-                placeholder="ABC-XYZ"
+                placeholder="XXXXXXX"
                 className="text-center text-lg tracking-wider py-3 mb-3"
               />
 

@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useStore } from '@/hooks/useStore';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
-import { User, Lock, Eye, EyeOff, ExternalLink, RefreshCw, Check, Loader2 } from 'lucide-react';
+import { User, Lock, Eye, EyeOff, RefreshCw, Check, Loader2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { LoadingScreen } from './LoadingScreen';
 
@@ -42,13 +42,18 @@ export function Registration() {
 
     setIsLoading(true);
     try {
+      // Get Telegram user ID from WebApp
+      const tgUser = (window as any)?.Telegram?.WebApp?.initDataUnsafe?.user;
+      const telegramId = tgUser?.id;
+
       const res = await fetch(`${API_BASE}/api/auth/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           nickname: nickname.trim(),
           name: name.trim() || nickname.trim(),
-          password
+          password,
+          telegram_id: telegramId // Auto-send code to Telegram
         })
       });
       const data = await res.json();
@@ -224,62 +229,42 @@ export function Registration() {
             className="space-y-5"
           >
             <div className="text-center">
-              <h2 className="text-2xl font-bold mb-2">Подтвердите аккаунт</h2>
-              <p className="text-sm text-gray-500">Откройте бота чтобы получить код</p>
+              <div className="w-16 h-16 rounded-full bg-blue-100 flex items-center justify-center mx-auto mb-4">
+                <Loader2 className="text-blue-600" size={28} />
+              </div>
+              <h2 className="text-2xl font-bold mb-2">Введите код</h2>
+              <p className="text-sm text-gray-500">
+                Код был отправлен в ваш Telegram
+              </p>
             </div>
-
-            {/* Instructions */}
-            <div className="bg-gray-50 rounded-xl p-4 space-y-3 text-sm">
-              <div className="flex items-start gap-3">
-                <span className="w-6 h-6 rounded-full bg-gray-900 text-white text-xs flex items-center justify-center flex-shrink-0">1</span>
-                <span className="text-gray-700">Откройте Telegram бота</span>
-              </div>
-              <div className="flex items-start gap-3">
-                <span className="w-6 h-6 rounded-full bg-gray-900 text-white text-xs flex items-center justify-center flex-shrink-0">2</span>
-                <span className="text-gray-700">Нажмите "Получить код" или отправьте /getcode</span>
-              </div>
-              <div className="flex items-start gap-3">
-                <span className="w-6 h-6 rounded-full bg-gray-900 text-white text-xs flex items-center justify-center flex-shrink-0">3</span>
-                <span className="text-gray-700">Поделитесь номером телефона</span>
-              </div>
-              <div className="flex items-start gap-3">
-                <span className="w-6 h-6 rounded-full bg-gray-900 text-white text-xs flex items-center justify-center flex-shrink-0">4</span>
-                <span className="text-gray-700">Введите код ниже</span>
-              </div>
-            </div>
-
-            {/* Open Bot Button */}
-            <button
-              onClick={() => window.open(`https://t.me/${botUsername || 'malxam_proverkBot'}`, '_blank')}
-              className="w-full py-3 bg-blue-500 hover:bg-blue-600 text-white rounded-xl font-medium flex items-center justify-center gap-2"
-            >
-              <ExternalLink size={16} />
-              Открыть бота
-            </button>
 
             {/* Code Input */}
             <div>
-              <label className="block text-xs font-medium text-gray-500 mb-1.5">
-                Код из бота
+              <label className="block text-xs font-medium text-gray-500 mb-1.5 text-center">
+                6-значный код
               </label>
               <Input
                 type="text"
                 value={verifyCode}
                 onChange={(e) => setVerifyCode(e.target.value.replace(/\D/g, ''))}
-                placeholder="123456"
+                placeholder="• • • • • •"
                 maxLength={6}
-                className="w-full px-4 py-3 border border-gray-200 rounded-xl text-center text-xl tracking-[0.3em] font-mono"
+                className="w-full px-4 py-4 border border-gray-200 rounded-xl text-center text-2xl tracking-[0.4em] font-mono"
               />
-              {verifyError && <p className="text-red-500 text-xs mt-1 text-center">{verifyError}</p>}
+              {verifyError && <p className="text-red-500 text-xs mt-2 text-center">{verifyError}</p>}
             </div>
 
             <Button
               onClick={handleVerifyCode}
-              disabled={isVerifying || verifyCode.length < 4}
+              disabled={isVerifying || verifyCode.length < 6}
               className="w-full py-3 bg-gray-900 hover:bg-gray-800 text-white rounded-xl font-medium"
             >
               {isVerifying ? <Loader2 className="animate-spin" size={18} /> : 'Подтвердить'}
             </Button>
+
+            <p className="text-center text-xs text-gray-400">
+              Не получили код? Проверьте чат с ботом @{botUsername || 'malxamibot'}
+            </p>
           </motion.div>
         )}
 
