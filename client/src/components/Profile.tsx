@@ -1,7 +1,6 @@
-import React, { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useStore } from '@/hooks/useStore';
-import { t } from '@/lib/i18n';
-import { BadgeCheck, Edit2, LogOut, Save, Loader2, Store, Sparkles } from 'lucide-react';
+import { BadgeCheck, Edit2, LogOut, Loader2, Store, Sparkles, Star, Trash2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Input } from './ui/input';
 import { cn } from '@/lib/utils';
@@ -75,11 +74,33 @@ function Confetti({ show }: { show: boolean }) {
   );
 }
 
+// Star Rating Display
+function StarRating({ rating }: { rating: number }) {
+  return (
+    <div className="flex gap-0.5">
+      {[1, 2, 3, 4, 5].map((star) => (
+        <Star
+          key={star}
+          size={14}
+          className={star <= rating ? 'text-yellow-400 fill-yellow-400' : 'text-gray-200'}
+        />
+      ))}
+    </div>
+  );
+}
+
+type TabType = 'posts' | 'reviews';
+
 export function Profile() {
-  const { language, registration, role, setLanguage, logout, updateProfile, stats, fetchStats, setRole } = useStore();
+  const { language, registration, role, setLanguage, logout, updateProfile, stats, fetchStats, setRole, myPosts, fetchMyPosts, removePost } = useStore();
   const [isEditing, setIsEditing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [newName, setNewName] = useState(registration.name);
+  const [activeTab, setActiveTab] = useState<TabType>('posts');
+
+  // Reviews
+  const [reviews, setReviews] = useState<any[]>([]);
+  const [loadingReviews, setLoadingReviews] = useState(false);
 
   // Seller verification
   const [showSellerModal, setShowSellerModal] = useState(false);
@@ -89,18 +110,37 @@ export function Profile() {
   const [showConfetti, setShowConfetti] = useState(false);
   const [isRequestingCode, setIsRequestingCode] = useState(false);
 
-  React.useEffect(() => {
+  useEffect(() => {
     fetchStats();
+    fetchMyPosts();
   }, []);
 
-  // Auto-request seller code when modal opens
+  useEffect(() => {
+    if (activeTab === 'reviews') {
+      loadReviews();
+    }
+  }, [activeTab]);
+
+  const loadReviews = async () => {
+    setLoadingReviews(true);
+    try {
+      // TODO: Get real user ID
+      const res = await fetch(`${API_BASE}/api/users/1/reviews`);
+      const data = await res.json();
+      setReviews(data || []);
+    } catch (e) {
+      console.error('Failed to load reviews');
+    } finally {
+      setLoadingReviews(false);
+    }
+  };
+
   const handleOpenSellerModal = async () => {
     setShowSellerModal(true);
     setSellerCode('');
     setSellerError('');
     setIsRequestingCode(true);
 
-    // Get Telegram user ID
     const tgUser = (window as any)?.Telegram?.WebApp?.initDataUnsafe?.user;
     const telegramId = tgUser?.id;
 
@@ -132,9 +172,8 @@ export function Profile() {
 
   const handleBecomeSeller = async () => {
     setSellerError('');
-
     if (!sellerCode || sellerCode.length < 4) {
-      setSellerError('Введите код из бота');
+      setSellerError('Введите код');
       return;
     }
 
@@ -143,10 +182,7 @@ export function Profile() {
       const res = await fetch(`${API_BASE}/api/auth/verify-seller`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          code: sellerCode.trim(),
-          account_id: 1 // TODO: Get real account ID
-        })
+        body: JSON.stringify({ code: sellerCode.trim(), account_id: 1 })
       });
       const data = await res.json();
 
@@ -155,7 +191,6 @@ export function Profile() {
         return;
       }
 
-      // Success!
       setShowConfetti(true);
       setTimeout(() => {
         setShowConfetti(false);
@@ -169,6 +204,16 @@ export function Profile() {
     }
   };
 
+  const handleDeletePost = async (postId: string) => {
+    if (!confirm('Удалить этот пост?')) return;
+    try {
+      await removePost(postId);
+      fetchMyPosts();
+    } catch (e) {
+      alert('Ошибка удаления');
+    }
+  };
+
   return (
     <>
       <Confetti show={showConfetti} />
@@ -176,58 +221,186 @@ export function Profile() {
       <motion.div
         initial={{ opacity: 0, y: 10 }}
         animate={{ opacity: 1, y: 0 }}
-        exit={{ opacity: 0, y: -10 }}
         transition={{ duration: 0.15 }}
-        className="space-y-6 pb-20"
+        className="space-y-5 pb-20"
       >
         {/* Profile Header */}
         <div className="flex flex-col items-center text-center">
           <Avatar name={registration.name || 'User'} size="lg" />
-          <h2 className="mt-3 text-xl font-bold text-gray-900">{registration.name || 'Пользователь'}</h2>
-          <div className="flex items-center gap-1.5 text-gray-500 text-sm mt-1">
-            {role === 'exchanger' ? (
-              <span className="flex items-center gap-1 text-green-600">
-                <Store size={14} />
-                Обменник
-              </span>
-            ) : (
-              <span>Клиент</span>
-            )}
-            <BadgeCheck size={14} className="text-blue-500" />
+
+          {isEditing ? (
+            <div className="mt-3 w-full max-w-xs">
+              <Input
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+                placeholder="Ваше имя"
+                className="text-center"
+              />
+              <div className="flex gap-2 mt-2">
+                <button
+                  onClick={() => setIsEditing(false)}
+                  className="flex-1 py-2 text-gray-600 text-sm"
+                >
+                  Отмена
+                </button>
+                <button
+                  onClick={handleSave}
+                  disabled={isSaving}
+                  className="flex-1 py-2 bg-gray-900 text-white rounded-lg text-sm"
+                >
+                  {isSaving ? <Loader2 size={14} className="animate-spin mx-auto" /> : 'Сохранить'}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <>
+              <h2 className="mt-3 text-xl font-bold text-gray-900">{registration.name || 'Пользователь'}</h2>
+              <div className="flex items-center gap-1.5 text-gray-500 text-sm mt-1">
+                {role === 'exchanger' ? (
+                  <span className="flex items-center gap-1 text-green-600">
+                    <Store size={14} />
+                    Обменник
+                  </span>
+                ) : (
+                  <span>Клиент</span>
+                )}
+                <BadgeCheck size={14} className="text-blue-500" />
+              </div>
+              <button
+                onClick={() => setIsEditing(true)}
+                className="mt-2 text-xs text-gray-400 hover:text-gray-600 flex items-center gap-1"
+              >
+                <Edit2 size={12} />
+                Редактировать
+              </button>
+            </>
+          )}
+        </div>
+
+        {/* Stats */}
+        <div className="grid grid-cols-2 gap-3">
+          <div className="p-3 bg-gray-50 rounded-xl text-center">
+            <span className="block text-xl font-bold text-gray-900">{stats.active}</span>
+            <span className="text-xs text-gray-500">Активных</span>
+          </div>
+          <div className="p-3 bg-gray-50 rounded-xl text-center">
+            <span className="block text-xl font-bold text-gray-900">{stats.completed}</span>
+            <span className="text-xs text-gray-500">Завершено</span>
           </div>
         </div>
 
-        <div className="space-y-4">
-          {/* Become Seller Button */}
-          {role !== 'exchanger' && (
-            <button
-              onClick={handleOpenSellerModal}
-              className="w-full py-3.5 bg-gradient-to-r from-amber-500 to-orange-500 text-white rounded-xl font-medium flex items-center justify-center gap-2 shadow-lg hover:shadow-xl transition-shadow"
+        {/* Become Seller Button */}
+        {role !== 'exchanger' && (
+          <button
+            onClick={handleOpenSellerModal}
+            className="w-full py-3 bg-gradient-to-r from-amber-500 to-orange-500 text-white rounded-xl font-medium flex items-center justify-center gap-2 shadow-lg"
+          >
+            <Store size={18} />
+            Стать обменником
+          </button>
+        )}
+
+        {/* Tabs */}
+        <div className="flex bg-gray-100 rounded-xl p-1">
+          <button
+            onClick={() => setActiveTab('posts')}
+            className={cn(
+              'flex-1 py-2.5 rounded-lg text-sm font-medium transition-all',
+              activeTab === 'posts' ? 'bg-white shadow-sm text-gray-900' : 'text-gray-500'
+            )}
+          >
+            Мои посты
+          </button>
+          <button
+            onClick={() => setActiveTab('reviews')}
+            className={cn(
+              'flex-1 py-2.5 rounded-lg text-sm font-medium transition-all',
+              activeTab === 'reviews' ? 'bg-white shadow-sm text-gray-900' : 'text-gray-500'
+            )}
+          >
+            Отзывы
+          </button>
+        </div>
+
+        {/* Tab Content */}
+        <AnimatePresence mode="wait">
+          {activeTab === 'posts' && (
+            <motion.div
+              key="posts"
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              className="space-y-3"
             >
-              <Store size={18} />
-              Стать обменником
-            </button>
+              {myPosts.length === 0 ? (
+                <div className="text-center py-8 text-gray-400">
+                  <p>У вас пока нет постов</p>
+                </div>
+              ) : (
+                myPosts.map((post: any) => (
+                  <div key={post.id} className="bg-gray-50 rounded-xl p-4">
+                    <div className="flex justify-between items-start">
+                      <div className="flex-1">
+                        <p className="text-sm text-gray-900 line-clamp-2">{post.description || post.buy_description}</p>
+                        <p className="text-xs text-gray-400 mt-1">{post.location}</p>
+                      </div>
+                      <button
+                        onClick={() => handleDeletePost(post.id)}
+                        className="p-2 text-red-400 hover:text-red-600"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </motion.div>
           )}
 
-          {/* Stats */}
-          <div className="grid grid-cols-2 gap-3">
-            <div className="p-4 bg-gray-50 rounded-xl text-center">
-              <span className="block text-2xl font-bold text-gray-900">{stats.active}</span>
-              <span className="text-xs text-gray-500">{t('activeRequests', language)}</span>
-            </div>
-            <div className="p-4 bg-gray-50 rounded-xl text-center">
-              <span className="block text-2xl font-bold text-gray-900">{stats.completed}</span>
-              <span className="text-xs text-gray-500">{t('completedDeals', language)}</span>
-            </div>
-          </div>
+          {activeTab === 'reviews' && (
+            <motion.div
+              key="reviews"
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              className="space-y-3"
+            >
+              {loadingReviews ? (
+                <div className="text-center py-8">
+                  <Loader2 className="animate-spin mx-auto text-gray-400" size={24} />
+                </div>
+              ) : reviews.length === 0 ? (
+                <div className="text-center py-8 text-gray-400">
+                  <p>Пока нет отзывов</p>
+                </div>
+              ) : (
+                reviews.map((review: any) => (
+                  <div key={review.id} className="bg-gray-50 rounded-xl p-4">
+                    <div className="flex items-center gap-2 mb-2">
+                      <Avatar name={review.from_name || 'User'} size="sm" />
+                      <div>
+                        <p className="text-sm font-medium text-gray-900">{review.from_name}</p>
+                        <StarRating rating={review.rating} />
+                      </div>
+                    </div>
+                    {review.comment && (
+                      <p className="text-sm text-gray-600">{review.comment}</p>
+                    )}
+                  </div>
+                ))
+              )}
+            </motion.div>
+          )}
+        </AnimatePresence>
 
-          {/* Language */}
-          <div className="p-1 bg-gray-100 rounded-xl flex">
+        {/* Language & Logout */}
+        <div className="space-y-3 pt-4 border-t border-gray-100">
+          <div className="flex bg-gray-100 rounded-xl p-1">
             <button
               onClick={() => setLanguage('ru')}
               className={cn(
-                'flex-1 py-2.5 rounded-lg text-sm font-medium transition-all',
-                language === 'ru' ? 'bg-white shadow-sm text-gray-900' : 'text-gray-500'
+                'flex-1 py-2 rounded-lg text-sm',
+                language === 'ru' ? 'bg-white shadow-sm' : ''
               )}
             >
               Русский
@@ -235,46 +408,17 @@ export function Profile() {
             <button
               onClick={() => setLanguage('uz')}
               className={cn(
-                'flex-1 py-2.5 rounded-lg text-sm font-medium transition-all',
-                language === 'uz' ? 'bg-white shadow-sm text-gray-900' : 'text-gray-500'
+                'flex-1 py-2 rounded-lg text-sm',
+                language === 'uz' ? 'bg-white shadow-sm' : ''
               )}
             >
               O'zbekcha
             </button>
           </div>
 
-          {/* Edit Name */}
-          {isEditing ? (
-            <div className="space-y-3">
-              <Input
-                value={newName}
-                onChange={(e) => setNewName(e.target.value)}
-                placeholder="Ваше имя"
-                className="py-3"
-              />
-              <button
-                onClick={handleSave}
-                disabled={isSaving}
-                className="w-full py-3 bg-gray-900 text-white rounded-xl font-medium flex items-center justify-center gap-2"
-              >
-                {isSaving ? <Loader2 size={18} className="animate-spin" /> : <Save size={18} />}
-                Сохранить
-              </button>
-            </div>
-          ) : (
-            <button
-              onClick={() => setIsEditing(true)}
-              className="w-full py-3 border border-gray-200 rounded-xl font-medium flex items-center justify-center gap-2 text-gray-700 hover:bg-gray-50"
-            >
-              <Edit2 size={18} />
-              Редактировать профиль
-            </button>
-          )}
-
-          {/* Logout */}
           <button
             onClick={logout}
-            className="w-full py-3 text-red-600 bg-red-50 rounded-xl font-medium flex items-center justify-center gap-2 hover:bg-red-100"
+            className="w-full py-3 text-red-600 bg-red-50 rounded-xl font-medium flex items-center justify-center gap-2"
           >
             <LogOut size={18} />
             Выйти
@@ -309,7 +453,7 @@ export function Profile() {
                 </div>
                 <h3 className="text-lg font-bold">Стать обменником</h3>
                 <p className="text-sm text-gray-500 mt-1">
-                  {isRequestingCode ? 'Отправляем код...' : 'Код отправлен в ваш Telegram'}
+                  {isRequestingCode ? 'Отправляем код...' : 'Код отправлен в Telegram'}
                 </p>
               </div>
 

@@ -7,7 +7,7 @@ export function Header() {
   const location = useLocation();
   const navigate = useNavigate();
 
-  // Check if we're on a sub-page (not main tabs)
+  // Check if we're on a sub-page
   const isSubPage = location.pathname !== '/' &&
     !location.pathname.startsWith('/feed') &&
     location.pathname !== '';
@@ -24,7 +24,7 @@ export function Header() {
 
   return (
     <div className="fixed top-0 left-0 right-0 bg-white border-b border-gray-100 z-50">
-      <div className="flex justify-between items-center px-4 py-3 max-w-md mx-auto">
+      <div className="flex justify-between items-center px-4 py-2.5 max-w-md mx-auto">
         {/* Left: Back button or spacer */}
         <div className="w-10 flex justify-start">
           {showBackButton && (
@@ -38,11 +38,13 @@ export function Header() {
           )}
         </div>
 
-        {/* Center: Logo */}
+        {/* Center: Logo Image */}
         <div className="flex-1 flex justify-center">
-          <span className="text-xl font-black tracking-tight text-gray-900">
-            Nell<span className="inline-block transform rotate-12">X</span>
-          </span>
+          <img
+            src="/nellx-logo.png"
+            alt="NellX"
+            className="h-7 object-contain"
+          />
         </div>
 
         {/* Right: Add button or spacer */}

@@ -3,7 +3,7 @@ import { useStore } from '@/hooks/useStore';
 import { Input } from './ui/input';
 import { Button } from './ui/button';
 import { motion } from 'framer-motion';
-import { User, Lock, Eye, EyeOff, ArrowLeft, RefreshCw } from 'lucide-react';
+import { User, Lock, Eye, EyeOff, ArrowLeft, Loader2, CheckCircle } from 'lucide-react';
 
 const API_BASE = '';
 
@@ -14,6 +14,8 @@ export function Login() {
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [showSuccess, setShowSuccess] = useState(false);
+  const [userName, setUserName] = useState('');
 
   const handleLogin = async () => {
     setError('');
@@ -45,19 +47,43 @@ export function Login() {
         return;
       }
 
-      // Success
-      setRegistration({
-        name: data.name,
-        verified: data.telegram_linked,
-        completed: true
-      });
-      completeRegistration();
+      // Success - show toast then redirect
+      setUserName(data.name || nickname);
+      setShowSuccess(true);
+
+      // Wait for toast, then complete login
+      setTimeout(() => {
+        setRegistration({
+          name: data.name,
+          verified: data.telegram_linked,
+          completed: true
+        });
+        completeRegistration();
+      }, 1500);
+
     } catch (e) {
       setError('Ошибка сети');
     } finally {
       setIsLoading(false);
     }
   };
+
+  // Success Toast
+  if (showSuccess) {
+    return (
+      <motion.div
+        initial={{ opacity: 0, scale: 0.9 }}
+        animate={{ opacity: 1, scale: 1 }}
+        className="flex flex-col items-center justify-center py-16"
+      >
+        <div className="w-20 h-20 rounded-full bg-green-100 flex items-center justify-center mb-4">
+          <CheckCircle className="text-green-600" size={40} />
+        </div>
+        <h2 className="text-2xl font-bold text-gray-900 mb-2">Добро пожаловать!</h2>
+        <p className="text-gray-500">{userName}</p>
+      </motion.div>
+    );
+  }
 
   return (
     <motion.div
@@ -128,7 +154,7 @@ export function Login() {
           disabled={isLoading}
           className="w-full py-3 bg-gray-900 hover:bg-gray-800 text-white rounded-xl font-medium"
         >
-          {isLoading ? <RefreshCw className="animate-spin" size={18} /> : 'Войти'}
+          {isLoading ? <Loader2 className="animate-spin" size={18} /> : 'Войти'}
         </Button>
       </div>
 
