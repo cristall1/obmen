@@ -90,3 +90,28 @@ async def cmd_unmute(message: types.Message):
         await message.reply(f"🔊 С пользователя {target.full_name} сняты ограничения.")
     except Exception as e:
         await message.reply(f"❌ Не удалось размутить: {e}")
+
+
+# Admin command to clear all posts (only for bot admins, not group admins)
+ADMIN_IDS = [5912983856]  # Add your admin Telegram IDs
+
+@router.message(Command("clear_posts"))
+async def cmd_clear_posts(message: types.Message):
+    if message.from_user.id not in ADMIN_IDS:
+        return await message.reply("❌ Только для администраторов бота.")
+    
+    from bot.database.database import delete_all_posts
+    count = await delete_all_posts()
+    await message.reply(f"✅ Удалено {count} постов с сайта.")
+
+@router.message(Command("seller_code"))
+async def cmd_seller_code(message: types.Message):
+    """Generate seller verification code"""
+    from bot.database.database import generate_seller_code
+    code = await generate_seller_code(message.from_user.id)
+    await message.reply(
+        f"Ваш код продавца: <b>{code}</b>\n\n"
+        "Введите этот код на сайте чтобы стать продавцом.",
+        parse_mode="HTML"
+    )
+

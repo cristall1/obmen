@@ -1,30 +1,53 @@
 import { useState, useEffect } from 'react';
 import { useStore } from '@/hooks/useStore';
 import { Button } from './ui/button';
-import { User, Briefcase, Copy, Check, RefreshCw, ExternalLink, LogIn } from 'lucide-react';
-import { generateVerificationCode, checkVerified } from '@/lib/api';
+import { User, Lock, Copy, Check, RefreshCw, ExternalLink, Eye, EyeOff } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { LoadingScreen } from './LoadingScreen';
 
+const API_BASE = '';
+
+async function apiCall(endpoint: string, data: any) {
+  const res = await fetch(`${API_BASE}${endpoint}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data)
+  });
+  return res.json();
+}
+
 export function Registration() {
-  const { registration, setRegistration, role, setRole, completeRegistration, botUsername, userId } = useStore();
+  const { setRegistration, completeRegistration, botUsername } = useStore();
+
+  const [mode, setMode] = useState<'register' | 'login'>('register');
+  const [nickname, setNickname] = useState('');
+  const [name, setName] = useState('');
+  const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [isLoading, setIsLoading] = useState(false);
+
+  // Verification state
+  const [showVerification, setShowVerification] = useState(false);
+  const [verificationCode, setVerificationCode] = useState('');
+  const [copied, setCopied] = useState(false);
+  const [verified, setVerified] = useState(false);
   const [showLoading, setShowLoading] = useState(false);
 
-  const [generatedCode, setGeneratedCode] = useState('');
-  const [isGenerating, setIsGenerating] = useState(false);
-  const [copied, setCopied] = useState(false);
-  const [isChecking, setIsChecking] = useState(false);
-
-  // Poll for verification status
+  // Poll for verification
   useEffect(() => {
-    if (!generatedCode) return;
+    if (!verificationCode || verified) return;
 
     const checkStatus = async () => {
       try {
-        const result = await checkVerified(generatedCode);
+        const result = await apiCall('/api/auth/check-verified', { code: verificationCode });
         if (result.verified) {
-          setRegistration({ verified: true });
+          setVerified(true);
+          setRegistration({
+            name: result.name,
+            verified: true,
+            completed: false
+          });
         }
       } catch (e) {
         console.error('Check failed', e);
@@ -33,73 +56,89 @@ export function Registration() {
 
     const interval = setInterval(checkStatus, 3000);
     return () => clearInterval(interval);
-  }, [generatedCode, setRegistration]);
+  }, [verificationCode, verified, setRegistration]);
 
-  const handleGenerateCode = async () => {
+  const handleRegister = async () => {
     setErrors({});
-    if (!registration.name?.trim()) {
-      setErrors({ name: 'Укажите имя' });
+
+    if (!nickname || nickname.length < 3) {
+      setErrors({ nickname: 'Минимум 3 символа' });
+      return;
+    }
+    if (!password || password.length < 4) {
+      setErrors({ password: 'Минимум 4 символа' });
       return;
     }
 
-    setIsGenerating(true);
+    setIsLoading(true);
     try {
-      const result = await generateVerificationCode(
-        '',
-        userId,
-        '',
-        registration.name
-      );
-      if (result && result.code) {
-        setGeneratedCode(result.code);
-      } else {
-        setErrors({ code: 'Ошибка генерации' });
+      const result = await apiCall('/api/auth/register', { nickname, name, password });
+
+      if (result.error === 'nickname_exists') {
+        setErrors({ nickname: 'Этот ник уже занят' });
+        return;
       }
+      if (result.error) {
+        setErrors({ general: 'Ошибка регистрации' });
+        return;
+      }
+
+      setVerificationCode(result.code);
+      setShowVerification(true);
     } catch (e) {
-      console.error('Generate code error:', e);
-      setErrors({ code: 'Ошибка сервера' });
+      setErrors({ general: 'Ошибка сети' });
     } finally {
-      setIsGenerating(false);
+      setIsLoading(false);
+    }
+  };
+
+  const handleLogin = async () => {
+    setErrors({});
+
+    if (!nickname) {
+      setErrors({ nickname: 'Введите ник' });
+      return;
+    }
+    if (!password) {
+      setErrors({ password: 'Введите пароль' });
+      return;
+    }
+
+    setIsLoading(true);
+    try {
+      const result = await apiCall('/api/auth/login', { nickname, password });
+
+      if (result.error === 'invalid_credentials') {
+        setErrors({ general: 'Неверный ник или пароль' });
+        return;
+      }
+      if (result.error) {
+        setErrors({ general: 'Ошибка входа' });
+        return;
+      }
+
+      // Successful login
+      setRegistration({
+        name: result.name,
+        verified: result.telegram_linked,
+        completed: true
+      });
+
+      setShowLoading(true);
+    } catch (e) {
+      setErrors({ general: 'Ошибка сети' });
+    } finally {
+      setIsLoading(false);
     }
   };
 
   const handleCopyCode = () => {
-    navigator.clipboard.writeText(generatedCode);
+    navigator.clipboard.writeText(verificationCode);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const handleCheckVerification = async () => {
-    setIsChecking(true);
-    try {
-      const result = await checkVerified(generatedCode);
-      if (result.verified) {
-        setRegistration({ verified: true });
-      } else {
-        setErrors({ code: 'Код ещё не подтверждён' });
-      }
-    } catch (e) {
-      setErrors({ code: 'Ошибка проверки' });
-    } finally {
-      setIsChecking(false);
-    }
-  };
-
-  const handleSubmit = () => {
-    if (!registration.name?.trim()) {
-      setErrors({ name: 'Укажите имя' });
-      return;
-    }
-    if (!registration.verified) {
-      setErrors({ code: 'Подтвердите код через бота' });
-      return;
-    }
-    if (!registration.agreed) {
-      setErrors({ agreed: 'Примите условия' });
-      return;
-    }
-
-    setErrors({});
+  const handleComplete = () => {
     setShowLoading(true);
   };
 
@@ -116,216 +155,174 @@ export function Registration() {
         onComplete={handleLoadingComplete}
       />
 
-      <div className="space-y-6">
-        {/* Role Selection */}
-        <div>
-          <label className="block text-sm font-semibold text-gray-700 mb-3">
-            Выберите роль
-          </label>
-          <div className="grid grid-cols-2 gap-3">
-            <button
-              onClick={() => {
-                setRole('client');
-                setRegistration({ role: 'client' });
-              }}
-              className={cn(
-                'p-4 rounded-2xl border-2 transition-all duration-200 flex flex-col items-center gap-2',
-                role === 'client'
-                  ? 'border-gray-900 bg-gray-900 text-white shadow-lg'
-                  : 'border-gray-200 bg-white text-gray-700 hover:border-gray-300'
-              )}
-            >
-              <div className={cn(
-                'w-12 h-12 rounded-xl flex items-center justify-center',
-                role === 'client' ? 'bg-white/20' : 'bg-gray-100'
-              )}>
-                <User size={24} className={role === 'client' ? 'text-white' : 'text-gray-600'} />
-              </div>
-              <span className="font-semibold">Пользователь</span>
-              <span className={cn('text-xs', role === 'client' ? 'text-gray-300' : 'text-gray-500')}>
-                Ищу обмен
-              </span>
-            </button>
-
-            <button
-              onClick={() => {
-                setRole('exchanger');
-                setRegistration({ role: 'exchanger' });
-              }}
-              className={cn(
-                'p-4 rounded-2xl border-2 transition-all duration-200 flex flex-col items-center gap-2',
-                role === 'exchanger'
-                  ? 'border-gray-900 bg-gray-900 text-white shadow-lg'
-                  : 'border-gray-200 bg-white text-gray-700 hover:border-gray-300'
-              )}
-            >
-              <div className={cn(
-                'w-12 h-12 rounded-xl flex items-center justify-center',
-                role === 'exchanger' ? 'bg-white/20' : 'bg-gray-100'
-              )}>
-                <Briefcase size={24} className={role === 'exchanger' ? 'text-white' : 'text-gray-600'} />
-              </div>
-              <span className="font-semibold">Обменник</span>
-              <span className={cn('text-xs', role === 'exchanger' ? 'text-gray-300' : 'text-gray-500')}>
-                Предлагаю обмен
-              </span>
-            </button>
-          </div>
-        </div>
-
-        {/* Name Field */}
-        <div>
-          <label className="block text-sm font-semibold text-gray-700 mb-2">
-            Ваше имя
-          </label>
-          <div className="relative">
-            <User className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" size={20} />
-            <input
-              type="text"
-              value={registration.name}
-              onChange={(e) => setRegistration({ name: e.target.value })}
-              placeholder="Введите имя"
-              className="w-full pl-12 pr-4 py-4 border border-gray-200 rounded-xl focus:ring-2 focus:ring-gray-900/10 focus:border-gray-900 transition-all"
-            />
-          </div>
-          {errors.name && <p className="text-red-500 text-sm mt-1">{errors.name}</p>}
-        </div>
-
-        {/* Verification Section */}
-        <div className="bg-gray-50 rounded-2xl p-5 space-y-4">
-          <div className="text-sm font-semibold text-gray-800">
-            Подтверждение
-          </div>
-
-          {!generatedCode ? (
-            <Button
-              onClick={handleGenerateCode}
-              disabled={isGenerating || !registration.name?.trim()}
-              className="w-full py-4 bg-gray-900 hover:bg-gray-800 text-white rounded-xl font-semibold disabled:opacity-50"
-            >
-              {isGenerating ? (
-                <>
-                  <RefreshCw className="animate-spin mr-2" size={18} />
-                  Генерация...
-                </>
-              ) : (
-                'Получить код'
-              )}
-            </Button>
-          ) : (
-            <div className="space-y-4">
-              {/* Code Display */}
-              <div className="flex items-center gap-3">
-                <div className="flex-1 bg-white border-2 border-dashed border-gray-300 rounded-xl p-4 text-center">
-                  <span className="text-3xl font-mono font-bold tracking-[0.3em] text-gray-900">
-                    {generatedCode}
-                  </span>
-                </div>
-                <button
-                  onClick={handleCopyCode}
-                  className="p-3 bg-white border border-gray-200 rounded-xl hover:bg-gray-50 transition-colors"
-                >
-                  {copied ? <Check size={20} className="text-green-500" /> : <Copy size={20} className="text-gray-600" />}
-                </button>
-              </div>
-
-              {/* Instructions */}
-              <div className="text-sm text-gray-600 space-y-2 bg-white rounded-xl p-4 border border-gray-100">
-                <p className="flex items-center gap-2">
-                  <span className="w-5 h-5 rounded-full bg-gray-900 text-white text-xs flex items-center justify-center font-medium">1</span>
-                  Скопируйте код
-                </p>
-                <p className="flex items-center gap-2">
-                  <span className="w-5 h-5 rounded-full bg-gray-900 text-white text-xs flex items-center justify-center font-medium">2</span>
-                  Откройте бота и нажмите "Подтвердить код"
-                </p>
-                <p className="flex items-center gap-2">
-                  <span className="w-5 h-5 rounded-full bg-gray-900 text-white text-xs flex items-center justify-center font-medium">3</span>
-                  Отправьте номер телефона и введите код
-                </p>
-              </div>
-
-              {/* Status */}
-              {registration.verified ? (
-                <div className="flex items-center gap-3 text-green-600 bg-green-50 rounded-xl p-4 border border-green-100">
-                  <div className="w-8 h-8 rounded-full bg-green-500 flex items-center justify-center">
-                    <Check size={18} className="text-white" />
-                  </div>
-                  <span className="font-semibold">Подтверждено!</span>
-                </div>
-              ) : (
-                <div className="grid grid-cols-2 gap-3">
-                  <button
-                    onClick={handleCheckVerification}
-                    disabled={isChecking}
-                    className="py-3 px-4 bg-white border border-gray-200 rounded-xl font-medium text-gray-700 hover:bg-gray-50 transition-colors flex items-center justify-center gap-2"
-                  >
-                    {isChecking ? <RefreshCw className="animate-spin" size={16} /> : null}
-                    Проверить
-                  </button>
-                  <button
-                    onClick={() => window.open(`https://t.me/${botUsername || 'malxam_proverkBot'}`, '_blank')}
-                    className="py-3 px-4 bg-gray-900 text-white rounded-xl font-medium hover:bg-gray-800 transition-colors flex items-center justify-center gap-2"
-                  >
-                    <ExternalLink size={16} />
-                    Открыть бота
-                  </button>
-                </div>
-              )}
-
-              {errors.code && <p className="text-red-500 text-sm">{errors.code}</p>}
-            </div>
-          )}
-        </div>
-
-        {/* Agreement */}
-        <label className="flex items-center gap-4 cursor-pointer group">
-          <div className="relative">
-            <input
-              type="checkbox"
-              checked={registration.agreed}
-              onChange={(e) => setRegistration({ agreed: e.target.checked })}
-              className="sr-only peer"
-            />
-            <div className={cn(
-              'w-6 h-6 rounded-lg border-2 transition-all flex items-center justify-center',
-              registration.agreed
-                ? 'bg-gray-900 border-gray-900'
-                : 'bg-white border-gray-300 group-hover:border-gray-400'
-            )}>
-              {registration.agreed && <Check size={14} className="text-white" strokeWidth={3} />}
-            </div>
-          </div>
-          <span className="text-sm text-gray-600">
-            Я согласен с условиями использования
-          </span>
-        </label>
-        {errors.agreed && <p className="text-red-500 text-sm ml-10">{errors.agreed}</p>}
-
-        {/* Submit Button */}
-        <Button
-          onClick={handleSubmit}
-          disabled={!registration.verified || !registration.agreed || !registration.name?.trim()}
-          className={cn(
-            'w-full py-4 rounded-xl font-semibold text-base transition-all',
-            registration.verified && registration.agreed && registration.name?.trim()
-              ? 'bg-gray-900 hover:bg-gray-800 text-white shadow-lg'
-              : 'bg-gray-200 text-gray-400 cursor-not-allowed'
-          )}
-        >
-          Продолжить
-        </Button>
-
-        {/* Login Link */}
-        <div className="text-center">
+      <div className="space-y-5">
+        {/* Mode Toggle */}
+        <div className="flex bg-gray-100 rounded-xl p-1">
           <button
-            onClick={() => alert('Функция входа будет доступна в следующей версии')}
-            className="text-sm text-gray-500 hover:text-gray-700 flex items-center justify-center gap-2 mx-auto"
+            onClick={() => setMode('register')}
+            className={cn(
+              'flex-1 py-2 text-sm font-medium rounded-lg transition-all',
+              mode === 'register' ? 'bg-white shadow-sm' : 'text-gray-500'
+            )}
           >
-            <LogIn size={14} />
-            У меня уже есть аккаунт
+            Регистрация
+          </button>
+          <button
+            onClick={() => setMode('login')}
+            className={cn(
+              'flex-1 py-2 text-sm font-medium rounded-lg transition-all',
+              mode === 'login' ? 'bg-white shadow-sm' : 'text-gray-500'
+            )}
+          >
+            Вход
           </button>
         </div>
+
+        {!showVerification ? (
+          <>
+            {/* Nickname */}
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1">
+                Ваш ник (логин)
+              </label>
+              <div className="relative">
+                <User className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
+                <input
+                  type="text"
+                  value={nickname}
+                  onChange={(e) => setNickname(e.target.value.toLowerCase().replace(/\s/g, ''))}
+                  placeholder="nickname"
+                  className="w-full pl-10 pr-4 py-3 border border-gray-200 rounded-xl text-sm"
+                />
+              </div>
+              {errors.nickname && <p className="text-red-500 text-xs mt-1">{errors.nickname}</p>}
+            </div>
+
+            {/* Name (only for register) */}
+            {mode === 'register' && (
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">
+                  Имя (отображаемое)
+                </label>
+                <input
+                  type="text"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="Ваше имя"
+                  className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm"
+                />
+              </div>
+            )}
+
+            {/* Password */}
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1">
+                Пароль
+              </label>
+              <div className="relative">
+                <Lock className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="••••••"
+                  className="w-full pl-10 pr-12 py-3 border border-gray-200 rounded-xl text-sm"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400"
+                >
+                  {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
+              </div>
+              {errors.password && <p className="text-red-500 text-xs mt-1">{errors.password}</p>}
+            </div>
+
+            {errors.general && (
+              <p className="text-red-500 text-sm text-center">{errors.general}</p>
+            )}
+
+            {/* Submit Button */}
+            <Button
+              onClick={mode === 'register' ? handleRegister : handleLogin}
+              disabled={isLoading}
+              className="w-full py-3 bg-gray-900 hover:bg-gray-800 text-white rounded-xl font-medium text-sm"
+            >
+              {isLoading ? (
+                <RefreshCw className="animate-spin" size={18} />
+              ) : mode === 'register' ? 'Создать аккаунт' : 'Войти'}
+            </Button>
+          </>
+        ) : (
+          /* Verification Step */
+          <div className="space-y-4">
+            <div className="text-center">
+              <h3 className="font-bold text-lg">Подтвердите аккаунт</h3>
+              <p className="text-sm text-gray-500 mt-1">
+                Скопируйте код и отправьте его боту
+              </p>
+            </div>
+
+            {/* Code Display */}
+            <div className="flex items-center gap-2">
+              <div className="flex-1 bg-gray-50 border-2 border-dashed border-gray-300 rounded-xl p-4 text-center">
+                <span className="text-2xl font-mono font-bold tracking-[0.2em] text-gray-900">
+                  {verificationCode}
+                </span>
+              </div>
+              <button
+                onClick={handleCopyCode}
+                className="p-3 bg-gray-100 rounded-xl hover:bg-gray-200 transition-colors"
+              >
+                {copied ? <Check size={20} className="text-green-500" /> : <Copy size={20} className="text-gray-600" />}
+              </button>
+            </div>
+
+            {/* Instructions */}
+            <div className="text-sm text-gray-600 space-y-2 bg-gray-50 rounded-xl p-3">
+              <p className="flex items-start gap-2">
+                <span className="w-5 h-5 rounded-full bg-gray-900 text-white text-xs flex items-center justify-center flex-shrink-0 mt-0.5">1</span>
+                <span>Скопируйте код выше</span>
+              </p>
+              <p className="flex items-start gap-2">
+                <span className="w-5 h-5 rounded-full bg-gray-900 text-white text-xs flex items-center justify-center flex-shrink-0 mt-0.5">2</span>
+                <span>Откройте бота и нажмите "Подтвердить код"</span>
+              </p>
+              <p className="flex items-start gap-2">
+                <span className="w-5 h-5 rounded-full bg-gray-900 text-white text-xs flex items-center justify-center flex-shrink-0 mt-0.5">3</span>
+                <span>Отправьте номер телефона и введите код</span>
+              </p>
+            </div>
+
+            {/* Status */}
+            {verified ? (
+              <div className="flex items-center gap-2 text-green-600 bg-green-50 rounded-xl p-3 border border-green-100">
+                <div className="w-6 h-6 rounded-full bg-green-500 flex items-center justify-center">
+                  <Check size={14} className="text-white" />
+                </div>
+                <span className="font-medium text-sm">Подтверждено!</span>
+              </div>
+            ) : (
+              <button
+                onClick={() => window.open(`https://t.me/${botUsername || 'malxam_proverkBot'}`, '_blank')}
+                className="w-full py-3 bg-gray-900 text-white rounded-xl font-medium text-sm flex items-center justify-center gap-2"
+              >
+                <ExternalLink size={16} />
+                Открыть бота
+              </button>
+            )}
+
+            {verified && (
+              <Button
+                onClick={handleComplete}
+                className="w-full py-3 bg-gray-900 hover:bg-gray-800 text-white rounded-xl font-medium text-sm"
+              >
+                Продолжить
+              </Button>
+            )}
+          </div>
+        )}
       </div>
     </>
   );

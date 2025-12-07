@@ -56,68 +56,106 @@ async def handle_set_role(request):
 import time
 RATE_LIMITS = {}
 
-# In-memory pending verification codes (user_id -> {code, phone, username, name})
-PENDING_VERIFICATIONS = {}
+# ============= NEW AUTH ENDPOINTS =============
+
+@routes.post('/api/auth/check-nickname')
+async def handle_check_nickname(request):
+    """Check if nickname is available"""
+    data = await request.json()
+    nickname = data.get('nickname', '')
+    
+    if not nickname or len(nickname) < 3:
+        return web.json_response({'available': False, 'error': 'too_short'})
+    
+    from bot.database.database import check_nickname_exists
+    exists = await check_nickname_exists(nickname)
+    return web.json_response({'available': not exists})
+
+@routes.post('/api/auth/register')
+async def handle_register(request):
+    """Register new account with nickname and password"""
+    data = await request.json()
+    nickname = data.get('nickname', '').strip()
+    name = data.get('name', '').strip()
+    password = data.get('password', '')
+    
+    if not nickname or len(nickname) < 3:
+        return web.json_response({'error': 'nickname_too_short'}, status=400)
+    if not password or len(password) < 4:
+        return web.json_response({'error': 'password_too_short'}, status=400)
+    
+    from bot.database.database import register_web_account
+    result = await register_web_account(nickname, name or nickname, password)
+    
+    if 'error' in result:
+        return web.json_response(result, status=400)
+    
+    logging.info(f"New account registered: {nickname}, code: {result['code']}")
+    return web.json_response(result)
+
+@routes.post('/api/auth/login')
+async def handle_login(request):
+    """Login with nickname and password"""
+    data = await request.json()
+    nickname = data.get('nickname', '').strip()
+    password = data.get('password', '')
+    
+    from bot.database.database import login_web_account
+    result = await login_web_account(nickname, password)
+    
+    if 'error' in result:
+        return web.json_response(result, status=401)
+    
+    return web.json_response(result)
+
+@routes.post('/api/auth/check-verified')
+async def handle_check_verified(request):
+    """Check if verification code was verified by bot"""
+    data = await request.json()
+    code = data.get('code', '')
+    
+    from bot.database.database import check_code_verified
+    result = await check_code_verified(code)
+    return web.json_response(result)
+
+@routes.post('/api/auth/verify-seller')
+async def handle_verify_seller(request):
+    """Verify seller code and upgrade account"""
+    data = await request.json()
+    code = data.get('code', '').strip()
+    account_id = data.get('account_id')
+    
+    if not code or not account_id:
+        return web.json_response({'error': 'missing_data'}, status=400)
+    
+    from bot.database.database import verify_seller_code
+    success = await verify_seller_code(code, account_id)
+    
+    if success:
+        return web.json_response({'success': True})
+    return web.json_response({'error': 'invalid_code'}, status=400)
+
+# ============= LEGACY ENDPOINTS (keep for compatibility) =============
 
 @routes.post('/api/auth/generate-code')
 async def handle_generate_code(request):
-    """Generate verification code and return it to user"""
+    """Legacy: Generate verification code"""
     data = await request.json()
     user_id = data.get('user_id')
-    phone = data.get('phone', '')
-    username = data.get('username', '')
     name = data.get('name', '')
     
     if not user_id:
         return web.json_response({'error': 'Missing user_id'}, status=400)
 
-    # Generate 5-digit code
     import random
-    code = f"{random.randint(10000, 99999)}"
+    code = f"{random.randint(100000, 999999)}"
     
-    # Save pending verification
-    PENDING_VERIFICATIONS[str(user_id)] = {
-        'code': code,
-        'phone': phone,
-        'username': username,
-        'name': name
-    }
-    
-    # Also save to DB for bot verification
     from bot.database.database import add_user, save_verification_code_by_user
     await add_user(int(user_id), 'ru')
-    
-    # Save code linked to user_id in DB
-    await save_verification_code_by_user(int(user_id), code, phone or f"pending_{user_id}")
+    await save_verification_code_by_user(int(user_id), code, f"pending_{user_id}")
     
     logging.info(f"Generated code {code} for user {user_id}")
     return web.json_response({'status': 'ok', 'code': code})
-
-@routes.post('/api/auth/check-verified')
-async def handle_check_verified(request):
-    """Check if code has been verified via bot"""
-    data = await request.json()
-    code = data.get('code')
-    
-    if not code:
-        return web.json_response({'error': 'Missing code'}, status=400)
-    
-    from bot.database.database import is_code_verified
-    verified = await is_code_verified(code)
-    
-    return web.json_response({'verified': verified})
-
-@routes.post('/api/auth/verify')
-async def handle_verify_code(request):
-    """Legacy verify endpoint - now just checks if code verified in DB"""
-    data = await request.json()
-    code = data.get('code')
-    
-    from bot.database.database import is_code_verified
-    if await is_code_verified(code):
-        return web.json_response({'status': 'ok', 'token': 'verified'})
-    else:
-        return web.json_response({'error': 'Not verified yet'}, status=400)
 
 @routes.post('/api/user/update')
 async def handle_update_user(request):

@@ -177,7 +177,7 @@ async def create_tables():
                 image_data TEXT,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY(user_id) REFERENCES users(telegram_id)
-            )
+        )
         """)
         await _ensure_column(db, "market_posts", "image_data", "TEXT")
 
@@ -193,6 +193,48 @@ async def create_tables():
         # Add category to market_posts
         await _ensure_column(db, "market_posts", "category", "TEXT")
 
+        # Web accounts for login/password auth
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS web_accounts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                nickname TEXT UNIQUE NOT NULL,
+                name TEXT,
+                password_hash TEXT NOT NULL,
+                telegram_id INTEGER,
+                phone TEXT,
+                role TEXT DEFAULT 'client',
+                is_seller_verified INTEGER DEFAULT 0,
+                avatar_url TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        # Verification codes for web-to-bot linking
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS web_verification_codes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                account_id INTEGER,
+                code TEXT NOT NULL,
+                verified INTEGER DEFAULT 0,
+                telegram_id INTEGER,
+                phone TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(account_id) REFERENCES web_accounts(id)
+            )
+        """)
+
+        # Seller verification codes (alphabetic)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS seller_codes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                telegram_id INTEGER,
+                code TEXT NOT NULL,
+                used INTEGER DEFAULT 0,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        await db.commit()
         logging.info("Tables created successfully")
 
 async def add_user(telegram_id: int, language: str):
@@ -664,3 +706,194 @@ async def delete_market_post(post_id: int, user_id: int):
     async with aiosqlite.connect(DB_NAME) as db:
         await db.execute("DELETE FROM market_posts WHERE id = ? AND user_id = ?", (post_id, user_id))
         await db.commit()
+
+# ============= WEB ACCOUNT AUTH FUNCTIONS =============
+
+import hashlib
+import secrets
+import string
+
+def hash_password(password: str) -> str:
+    return hashlib.sha256(password.encode()).hexdigest()
+
+def generate_numeric_code(length: int = 6) -> str:
+    return ''.join(secrets.choice(string.digits) for _ in range(length))
+
+def generate_alpha_code(length: int = 7) -> str:
+    return ''.join(secrets.choice(string.ascii_lowercase) for _ in range(length))
+
+async def check_nickname_exists(nickname: str) -> bool:
+    async with aiosqlite.connect(DB_NAME) as db:
+        cursor = await db.execute("SELECT id FROM web_accounts WHERE LOWER(nickname) = LOWER(?)", (nickname,))
+        row = await cursor.fetchone()
+        return row is not None
+
+async def register_web_account(nickname: str, name: str, password: str) -> dict:
+    """Register new web account, returns account info with verification code"""
+    if await check_nickname_exists(nickname):
+        return {"error": "nickname_exists"}
+    
+    password_hash = hash_password(password)
+    
+    async with aiosqlite.connect(DB_NAME) as db:
+        cursor = await db.execute(
+            "INSERT INTO web_accounts (nickname, name, password_hash) VALUES (?, ?, ?)",
+            (nickname, name, password_hash)
+        )
+        account_id = cursor.lastrowid
+        
+        # Generate verification code
+        code = generate_numeric_code(6)
+        await db.execute(
+            "INSERT INTO web_verification_codes (account_id, code) VALUES (?, ?)",
+            (account_id, code)
+        )
+        await db.commit()
+        
+        return {
+            "success": True,
+            "account_id": account_id,
+            "nickname": nickname,
+            "name": name,
+            "code": code
+        }
+
+async def login_web_account(nickname: str, password: str) -> dict:
+    """Login with nickname and password"""
+    password_hash = hash_password(password)
+    
+    async with aiosqlite.connect(DB_NAME) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM web_accounts WHERE LOWER(nickname) = LOWER(?) AND password_hash = ?",
+            (nickname, password_hash)
+        )
+        row = await cursor.fetchone()
+        
+        if not row:
+            return {"error": "invalid_credentials"}
+        
+        return {
+            "success": True,
+            "account_id": row["id"],
+            "nickname": row["nickname"],
+            "name": row["name"],
+            "role": row["role"],
+            "telegram_linked": row["telegram_id"] is not None,
+            "is_seller": row["is_seller_verified"] == 1
+        }
+
+async def verify_code_from_bot(code: str, telegram_id: int, phone: str) -> dict:
+    """Bot verifies the code and links Telegram account"""
+    async with aiosqlite.connect(DB_NAME) as db:
+        # Find the code
+        cursor = await db.execute(
+            "SELECT id, account_id FROM web_verification_codes WHERE code = ? AND verified = 0",
+            (code,)
+        )
+        row = await cursor.fetchone()
+        
+        if not row:
+            return {"error": "invalid_code"}
+        
+        code_id, account_id = row
+        
+        # Update verification
+        await db.execute(
+            "UPDATE web_verification_codes SET verified = 1, telegram_id = ?, phone = ? WHERE id = ?",
+            (telegram_id, phone, code_id)
+        )
+        
+        # Link telegram to account
+        await db.execute(
+            "UPDATE web_accounts SET telegram_id = ?, phone = ? WHERE id = ?",
+            (telegram_id, phone, account_id)
+        )
+        await db.commit()
+        
+        return {"success": True, "account_id": account_id}
+
+async def check_code_verified(code: str) -> dict:
+    """Check if verification code was verified by bot"""
+    async with aiosqlite.connect(DB_NAME) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """SELECT wv.verified, wv.telegram_id, wv.phone, wa.nickname, wa.name, wa.role 
+               FROM web_verification_codes wv 
+               JOIN web_accounts wa ON wv.account_id = wa.id 
+               WHERE wv.code = ?""",
+            (code,)
+        )
+        row = await cursor.fetchone()
+        
+        if not row:
+            return {"verified": False}
+        
+        if row["verified"]:
+            return {
+                "verified": True,
+                "nickname": row["nickname"],
+                "name": row["name"],
+                "role": row["role"],
+                "telegram_id": row["telegram_id"]
+            }
+        return {"verified": False}
+
+async def get_account_by_id(account_id: int) -> dict:
+    async with aiosqlite.connect(DB_NAME) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute("SELECT * FROM web_accounts WHERE id = ?", (account_id,))
+        row = await cursor.fetchone()
+        if row:
+            return dict(row)
+        return None
+
+# ============= SELLER VERIFICATION =============
+
+async def generate_seller_code(telegram_id: int) -> str:
+    """Generate alphabetic code for seller verification"""
+    code = generate_alpha_code(7)
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute(
+            "INSERT INTO seller_codes (telegram_id, code) VALUES (?, ?)",
+            (telegram_id, code)
+        )
+        await db.commit()
+    return code
+
+async def verify_seller_code(code: str, account_id: int) -> bool:
+    """Verify seller code and upgrade account"""
+    async with aiosqlite.connect(DB_NAME) as db:
+        # Find unused code
+        cursor = await db.execute(
+            "SELECT id, telegram_id FROM seller_codes WHERE LOWER(code) = LOWER(?) AND used = 0",
+            (code,)
+        )
+        row = await cursor.fetchone()
+        
+        if not row:
+            return False
+        
+        code_id, telegram_id = row
+        
+        # Mark code as used
+        await db.execute("UPDATE seller_codes SET used = 1 WHERE id = ?", (code_id,))
+        
+        # Upgrade account to seller
+        await db.execute(
+            "UPDATE web_accounts SET role = 'exchanger', is_seller_verified = 1 WHERE id = ?",
+            (account_id,)
+        )
+        await db.commit()
+        return True
+
+# ============= ADMIN FUNCTIONS =============
+
+async def delete_all_posts():
+    """Admin function to clear all market posts"""
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute("DELETE FROM market_posts")
+        await db.commit()
+        cursor = await db.execute("SELECT changes()")
+        row = await cursor.fetchone()
+        return row[0] if row else 0

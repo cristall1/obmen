@@ -85,6 +85,22 @@ async def on_verification_code(message: types.Message, state: FSMContext):
     lang = user[2] if user else "ru"
     
     code = message.text.strip()
+    data = await state.get_data()
+    phone = data.get('phone', '')
+    
+    # Try new web account verification first
+    from bot.database.database import verify_code_from_bot
+    result = await verify_code_from_bot(code, message.from_user.id, phone)
+    
+    if result.get('success'):
+        await message.answer(
+            tr(lang, "verify_success"),
+            reply_markup=get_main_menu_keyboard(message.from_user.id, lang)
+        )
+        await state.clear()
+        return
+    
+    # Fallback to old verification
     success = await verify_code_by_user(message.from_user.id, code)
     
     if success:
@@ -95,6 +111,20 @@ async def on_verification_code(message: types.Message, state: FSMContext):
         await state.clear()
     else:
         await message.answer(tr(lang, "verify_fail"))
+
+
+# Seller code generation
+@router.callback_query(F.data == "get_seller_code")
+async def get_seller_code_handler(callback: types.CallbackQuery):
+    from bot.database.database import generate_seller_code
+    code = await generate_seller_code(callback.from_user.id)
+    
+    await callback.message.answer(
+        f"Ваш код продавца: <b>{code}</b>\n\n"
+        "Введите этот код на сайте чтобы стать продавцом.",
+        parse_mode="HTML"
+    )
+    await callback.answer()
 
 
 # Start command
