@@ -59,6 +59,7 @@ export function Login() {
           completed: true
         });
         completeRegistration();
+        closeLogin();
       }, 1500);
 
     } catch (e) {

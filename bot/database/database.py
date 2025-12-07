@@ -280,6 +280,17 @@ async def create_tables():
         # Avatar column for web_accounts
         await _ensure_column(db, "web_accounts", "avatar_url", "TEXT")
 
+        # Seller codes table
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS seller_codes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                telegram_id INTEGER NOT NULL,
+                code TEXT NOT NULL,
+                used INTEGER DEFAULT 0,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
         await db.commit()
         logging.info("Tables created successfully")
 
@@ -1110,3 +1121,45 @@ async def mark_ticket_sent(deal_id: int):
     async with aiosqlite.connect(DB_NAME) as db:
         await db.execute("UPDATE deals SET ticket_sent = 1 WHERE id = ?", (deal_id,))
         await db.commit()
+
+# ============= SELLER CODES =============
+
+async def generate_seller_code(telegram_id: int) -> str:
+    """Generate alphabetic seller code for user"""
+    import random
+    import string
+    # Generate 7-character alphabetic code
+    code = ''.join(random.choices(string.ascii_uppercase, k=7))
+    
+    async with aiosqlite.connect(DB_NAME) as db:
+        # Delete old codes for this user
+        await db.execute("DELETE FROM seller_codes WHERE telegram_id = ?", (telegram_id,))
+        # Insert new code
+        await db.execute(
+            "INSERT INTO seller_codes (telegram_id, code) VALUES (?, ?)",
+            (telegram_id, code)
+        )
+        await db.commit()
+    
+    return code
+
+async def verify_seller_code(code: str, account_id: int) -> bool:
+    """Verify seller code and upgrade account to exchanger"""
+    async with aiosqlite.connect(DB_NAME) as db:
+        cursor = await db.execute(
+            "SELECT telegram_id FROM seller_codes WHERE code = ? AND used = 0",
+            (code.upper(),)
+        )
+        row = await cursor.fetchone()
+        
+        if not row:
+            return False
+        
+        # Mark code as used
+        await db.execute("UPDATE seller_codes SET used = 1 WHERE code = ?", (code.upper(),))
+        
+        # Update account role to exchanger
+        await db.execute("UPDATE web_accounts SET role = 'exchanger' WHERE id = ?", (account_id,))
+        await db.commit()
+        
+        return True
