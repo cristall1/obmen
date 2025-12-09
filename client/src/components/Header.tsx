@@ -2,6 +2,36 @@ import { Plus, ArrowLeft } from 'lucide-react';
 import { useStore } from '@/hooks/useStore';
 import { useLocation, useNavigate } from 'react-router-dom';
 
+// NellX Logo SVG Component
+function NellXLogo() {
+  return (
+    <div className="flex items-center gap-0.5">
+      <span className="text-xl font-black tracking-tight text-gray-900">Nell</span>
+      <div className="relative">
+        <span className="text-xl font-black text-gray-900">X</span>
+        <svg
+          className="absolute -top-0.5 -right-1.5 w-2 h-2 text-gray-900"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="4"
+        >
+          <path d="M7 17L17 7M17 7H7M17 7V17" />
+        </svg>
+        <svg
+          className="absolute -bottom-0.5 -right-1.5 w-2 h-2 text-gray-900 rotate-180"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="4"
+        >
+          <path d="M7 17L17 7M17 7H7M17 7V17" />
+        </svg>
+      </div>
+    </div>
+  );
+}
+
 export function Header() {
   const { role, activeTab, setShowAddPostModal, registration } = useStore();
   const location = useLocation();
@@ -14,9 +44,9 @@ export function Header() {
 
   const showBackButton = isSubPage || location.pathname.includes('/post/') || location.pathname.includes('/user/');
 
-  // Don't show add button during registration
+  // Show add button for exchangers on feed or offers tabs
   const isRegistered = registration.completed === true;
-  const showAddButton = role === 'exchanger' && activeTab === 'feed' && isRegistered;
+  const showAddButton = role === 'exchanger' && (activeTab === 'feed' || activeTab === 'offers') && isRegistered;
 
   const handleBack = () => {
     navigate(-1);
@@ -38,13 +68,9 @@ export function Header() {
           )}
         </div>
 
-        {/* Center: Logo Image */}
+        {/* Center: Logo */}
         <div className="flex-1 flex justify-center">
-          <img
-            src="/nellx-logo.png"
-            alt="NellX"
-            className="h-7 object-contain"
-          />
+          <NellXLogo />
         </div>
 
         {/* Right: Add button or spacer */}

@@ -7,7 +7,6 @@ import { Feed } from './Feed';
 import { CreateRequest } from './CreateRequest';
 import { Offers } from './Offers';
 import { Profile } from './Profile';
-import { ExchangerInbox } from './ExchangerInbox';
 import { Onboarding } from './Onboarding';
 import { AddPostSheet } from './AddPostSheet';
 import { PostPage } from './PostPage';
@@ -16,16 +15,16 @@ import React from 'react';
 import { Routes, Route, useLocation } from 'react-router-dom';
 import { AnimatePresence } from 'framer-motion';
 
-import { Loading } from './Loading';
-
 export function AppShell() {
-  const { activeTab, registration, role, onboardingSeen, loginMode, setTelegramUser, fetchMarketPosts } = useStore();
-  const [isLoading, setIsLoading] = React.useState(true);
+  const { activeTab, registration, onboardingSeen, loginMode, hasAccount, setTelegramUser, fetchMarketPosts } = useStore();
   const location = useLocation();
 
   React.useEffect(() => {
-    const timer = setTimeout(() => setIsLoading(false), 800);
+    // Non-blocking - all async
     useStore.getState().fetchConfig();
+    fetchMarketPosts();
+
+    // Get Telegram user data
     try {
       const tgUser = (window as any)?.Telegram?.WebApp?.initDataUnsafe?.user;
       if (tgUser) {
@@ -36,20 +35,22 @@ export function AppShell() {
         });
       }
     } catch (e) {
-      console.warn('Telegram init data not available', e);
+      // Silent fail
     }
-    fetchMarketPosts();
-    return () => clearTimeout(timer);
   }, []);
 
-  if (isLoading) {
-    return <Loading />;
-  }
+  // No loading screen - instant
 
-  const isRegistered = registration.completed === true;
+  const isRegistered = registration.completed === true || registration.verified === true || hasAccount;
 
-  // Show onboarding first
-  if (!onboardingSeen) {
+  // Check localStorage directly for faster skip (handle null properly)
+  const storageData = localStorage.getItem('obmen-storage') || '';
+  const hasSeenOnboarding = onboardingSeen || storageData.includes('"onboardingSeen":true');
+  // Use state first, then fallback to localStorage
+  const hasRegistration = isRegistered || storageData.includes('"completed":true') || storageData.includes('"verified":true');
+
+  // Show onboarding first (only if truly not seen)
+  if (!hasSeenOnboarding) {
     return <Onboarding />;
   }
 
@@ -66,7 +67,7 @@ export function AppShell() {
   }
 
   // Show registration
-  if (!isRegistered) {
+  if (!hasRegistration) {
     return (
       <div className="min-h-screen bg-white">
         <Header />
@@ -92,9 +93,7 @@ export function AppShell() {
             <AnimatePresence mode="wait">
               {activeTab === 'feed' && <Feed key="feed" />}
               {activeTab === 'create' && <CreateRequest key="create" />}
-              {activeTab === 'offers' && (
-                role === 'exchanger' ? <ExchangerInbox key="exchanger" /> : <Offers key="offers" />
-              )}
+              {activeTab === 'offers' && <Offers key="offers" />}
               {activeTab === 'profile' && <Profile key="profile" />}
             </AnimatePresence>
           } />

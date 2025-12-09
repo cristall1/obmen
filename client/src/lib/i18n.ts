@@ -177,6 +177,14 @@ const translations: Record<Language, Record<TranslationKey, string>> = {
     confirmAcceptBid: 'Принять это предложение? Заявка будет закрыта.',
     offerAccepted: 'Предложение принято',
     orderClosed: 'Заявка закрыта',
+
+    // Offers page
+    myBids: 'Мои предложения',
+    noBids: 'Нет предложений',
+    activeOrders: 'Активные заявки',
+    noActiveOrders: 'Нет активных заявок',
+    myOrders: 'Мои заявки',
+    noOrders: 'Нет заявок',
   },
   uz: {
     // Header

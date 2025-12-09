@@ -74,6 +74,9 @@ export interface RegistrationData {
   agreed: boolean;
   verified?: boolean;
   completed?: boolean;
+  avatarUrl?: string;
+  telegramId?: number;
+  accountId?: number;
 }
 export interface Order {
   id: number;

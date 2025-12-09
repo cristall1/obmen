@@ -1,89 +1,294 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { useStore } from '@/hooks/useStore';
-import { MapPin, Search, X, Plus, Check } from 'lucide-react';
-import { motion } from 'framer-motion';
+import { MapPin, Search, X, Star, ChevronLeft, ChevronRight, Flame, TrendingUp, Sparkles } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
 import { cn } from '@/lib/utils';
 import { useNavigate } from 'react-router-dom';
+
+// Horizontal Scrollable Row with Navigation Arrows
+function SwimLane({
+  title,
+  icon: Icon,
+  posts,
+  onPostClick,
+  gradient
+}: {
+  title: string;
+  icon: React.ElementType;
+  posts: any[];
+  onPostClick: (post: any) => void;
+  gradient?: string;
+}) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [canScrollLeft, setCanScrollLeft] = useState(false);
+  const [canScrollRight, setCanScrollRight] = useState(true);
+
+  const checkScroll = () => {
+    if (scrollRef.current) {
+      const { scrollLeft, scrollWidth, clientWidth } = scrollRef.current;
+      setCanScrollLeft(scrollLeft > 10);
+      setCanScrollRight(scrollLeft < scrollWidth - clientWidth - 10);
+    }
+  };
+
+  useEffect(() => {
+    checkScroll();
+    const ref = scrollRef.current;
+    if (ref) {
+      ref.addEventListener('scroll', checkScroll);
+      return () => ref.removeEventListener('scroll', checkScroll);
+    }
+  }, [posts]);
+
+  const scroll = (direction: 'left' | 'right') => {
+    if (scrollRef.current) {
+      const scrollAmount = 200;
+      scrollRef.current.scrollBy({
+        left: direction === 'left' ? -scrollAmount : scrollAmount,
+        behavior: 'smooth'
+      });
+    }
+  };
+
+  if (posts.length === 0) return null;
+
+  return (
+    <div className="mb-6">
+      {/* Section Header */}
+      <div className="flex items-center justify-between mb-3 px-1">
+        <div className="flex items-center gap-2">
+          <div className={cn("w-8 h-8 rounded-lg flex items-center justify-center", gradient || "bg-gray-100")}>
+            <Icon size={16} className="text-white" />
+          </div>
+          <h3 className="font-bold text-gray-900">{title}</h3>
+        </div>
+
+        {/* Navigation Arrows */}
+        <div className="flex gap-1">
+          <button
+            onClick={() => scroll('left')}
+            disabled={!canScrollLeft}
+            className={cn(
+              "w-8 h-8 rounded-full flex items-center justify-center transition-all",
+              canScrollLeft
+                ? "bg-gray-100 hover:bg-gray-200 text-gray-700"
+                : "bg-gray-50 text-gray-300 cursor-not-allowed"
+            )}
+          >
+            <ChevronLeft size={18} />
+          </button>
+          <button
+            onClick={() => scroll('right')}
+            disabled={!canScrollRight}
+            className={cn(
+              "w-8 h-8 rounded-full flex items-center justify-center transition-all",
+              canScrollRight
+                ? "bg-gray-100 hover:bg-gray-200 text-gray-700"
+                : "bg-gray-50 text-gray-300 cursor-not-allowed"
+            )}
+          >
+            <ChevronRight size={18} />
+          </button>
+        </div>
+      </div>
+
+      {/* Horizontal Scroll */}
+      <div
+        ref={scrollRef}
+        className="flex gap-3 overflow-x-auto pb-2 -mx-4 px-4 snap-x snap-mandatory scrollbar-hide"
+        style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
+      >
+        {posts.map((post, index) => (
+          <motion.div
+            key={post.id}
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: index * 0.05 }}
+            whileTap={{ scale: 0.98 }}
+            onClick={() => onPostClick(post)}
+            className="flex-shrink-0 w-40 snap-start cursor-pointer"
+          >
+            <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden hover:shadow-md transition-shadow">
+              {/* Thumbnail */}
+              <div className="aspect-square bg-gradient-to-br from-gray-100 to-gray-50 relative">
+                {post.image_data || post.thumbnailUrl ? (
+                  <img
+                    src={post.image_data || post.thumbnailUrl}
+                    alt=""
+                    className="w-full h-full object-cover"
+                  />
+                ) : (
+                  <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-blue-50 to-purple-50">
+                    <span className="text-2xl font-bold text-gray-300">{post.currency || 'USD'}</span>
+                  </div>
+                )}
+                {/* Rate Badge */}
+                {post.rate && (
+                  <div className="absolute top-2 right-2 bg-green-500 text-white text-xs font-bold px-2 py-1 rounded-lg shadow-sm">
+                    {post.rate}
+                  </div>
+                )}
+                {/* Type Badge */}
+                {post.type && (
+                  <div className={cn(
+                    "absolute top-2 left-2 text-xs font-medium px-2 py-1 rounded-lg",
+                    post.type === 'buy' ? "bg-blue-500 text-white" : "bg-orange-500 text-white"
+                  )}>
+                    {post.type === 'buy' ? 'Куплю' : 'Продам'}
+                  </div>
+                )}
+              </div>
+
+              {/* Info */}
+              <div className="p-3">
+                <p className="text-sm font-medium text-gray-900 line-clamp-2 mb-2 min-h-[40px]">
+                  {post.description?.slice(0, 40) || post.buy_description?.slice(0, 40) || 'Обмен валюты'}
+                </p>
+                <div className="flex items-center justify-between">
+                  {post.location && (
+                    <div className="flex items-center gap-1 text-xs text-gray-400">
+                      <MapPin size={10} />
+                      <span className="truncate max-w-[60px]">{post.location}</span>
+                    </div>
+                  )}
+                  <div className="flex items-center gap-0.5">
+                    <Star size={10} className="text-yellow-400 fill-yellow-400" />
+                    <span className="text-xs text-gray-500">5.0</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </motion.div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// Animated Banner Carousel
+function BannerCarousel() {
+  const [activeIndex, setActiveIndex] = useState(0);
+  const banners = [
+    { id: 1, gradient: 'from-blue-500 to-purple-600', title: 'Лучшие курсы', subtitle: 'Обмен без комиссии' },
+    { id: 2, gradient: 'from-orange-400 to-pink-500', title: 'Быстро и надёжно', subtitle: 'Проверенные обменники' },
+    { id: 3, gradient: 'from-green-400 to-teal-500', title: 'NellX', subtitle: 'P2P обмен валют' },
+  ];
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setActiveIndex((prev) => (prev + 1) % banners.length);
+    }, 4000);
+    return () => clearInterval(timer);
+  }, []);
+
+  return (
+    <div className="mb-6">
+      <div className="relative overflow-hidden rounded-2xl">
+        <AnimatePresence mode="wait">
+          <motion.div
+            key={activeIndex}
+            initial={{ opacity: 0, x: 50 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: -50 }}
+            transition={{ duration: 0.3 }}
+            className={cn(
+              "w-full h-32 bg-gradient-to-r p-5 flex flex-col justify-end",
+              banners[activeIndex].gradient
+            )}
+          >
+            <motion.h2
+              initial={{ y: 10, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              transition={{ delay: 0.1 }}
+              className="text-white text-xl font-bold"
+            >
+              {banners[activeIndex].title}
+            </motion.h2>
+            <motion.p
+              initial={{ y: 10, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              transition={{ delay: 0.2 }}
+              className="text-white/80 text-sm"
+            >
+              {banners[activeIndex].subtitle}
+            </motion.p>
+          </motion.div>
+        </AnimatePresence>
+
+        {/* Navigation arrows */}
+        <button
+          onClick={() => setActiveIndex((prev) => (prev - 1 + banners.length) % banners.length)}
+          className="absolute left-2 top-1/2 -translate-y-1/2 w-8 h-8 bg-white/20 backdrop-blur-sm rounded-full flex items-center justify-center hover:bg-white/30 transition-colors"
+        >
+          <ChevronLeft size={18} className="text-white" />
+        </button>
+        <button
+          onClick={() => setActiveIndex((prev) => (prev + 1) % banners.length)}
+          className="absolute right-2 top-1/2 -translate-y-1/2 w-8 h-8 bg-white/20 backdrop-blur-sm rounded-full flex items-center justify-center hover:bg-white/30 transition-colors"
+        >
+          <ChevronRight size={18} className="text-white" />
+        </button>
+      </div>
+
+      {/* Dots */}
+      <div className="flex justify-center gap-1.5 mt-3">
+        {banners.map((_, i) => (
+          <button
+            key={i}
+            onClick={() => setActiveIndex(i)}
+            className={cn(
+              "h-2 rounded-full transition-all duration-300",
+              i === activeIndex ? "bg-gray-900 w-6" : "bg-gray-300 w-2"
+            )}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
 
 export function Feed() {
   const {
     searchQuery,
     setSearchQuery,
-    getFilteredPosts,
-    categoryFilter,
-    setCategoryFilter,
-    role,
-    fetchCategories,
-    addCategory,
-    myPosts,
-    fetchMyPosts,
-    fetchMarketPosts,
-    userId
+    getFilteredPosts
   } = useStore();
 
   const navigate = useNavigate();
   const [localSearch, setLocalSearch] = useState(searchQuery);
-  const [showAddCategory, setShowAddCategory] = useState(false);
-  const [newCategory, setNewCategory] = useState('');
-  const [isMyPostsMode, setIsMyPostsMode] = useState(false);
 
-  React.useEffect(() => {
-    fetchCategories();
-    fetchMarketPosts();
-  }, []);
+  // Get posts - AppShell already fetches them
 
-  React.useEffect(() => {
-    if (isMyPostsMode) {
-      fetchMyPosts();
-    }
-  }, [isMyPostsMode]);
-
-  const handleAddCategory = async () => {
-    if (newCategory.trim()) {
-      await addCategory(newCategory.trim());
-      setCategoryFilter(newCategory.trim());
-      setNewCategory('');
-      setShowAddCategory(false);
-    }
-  };
-
-  const debouncedSearch = useMemo(() => {
-    const timeoutId = setTimeout(() => {
-      setSearchQuery(localSearch);
-    }, 250);
-    return () => clearTimeout(timeoutId);
+  useEffect(() => {
+    const timer = setTimeout(() => setSearchQuery(localSearch), 250);
+    return () => clearTimeout(timer);
   }, [localSearch, setSearchQuery]);
 
-  React.useEffect(() => {
-    return debouncedSearch;
-  }, [debouncedSearch]);
+  const allPosts = getFilteredPosts();
 
-  const filteredPosts = isMyPostsMode ? myPosts : getFilteredPosts();
+  // Split posts into categories
+  const hotPosts = allPosts.slice(0, 8);
+  const topRatedPosts = allPosts.slice(0, 10);
+  const featuredPosts = allPosts.slice(0, 6);
+
+  const handlePostClick = (post: any) => {
+    navigate(`/post/${post.id}`);
+  };
 
   const handleClearSearch = () => {
     setLocalSearch('');
     setSearchQuery('');
   };
 
-  const isOwnPost = (post: any) => {
-    return post.ownerId === userId || post.user_id === userId;
-  };
-
-  // Navigate to post page instead of modal
-  const handlePostClick = (post: any) => {
-    navigate(`/post/${post.id}`);
-  };
-
   return (
     <motion.div
-      initial={{ opacity: 0, y: 10 }}
-      animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, y: -10 }}
-      transition={{ duration: 0.12, ease: 'easeOut' }}
-      className="space-y-4"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      transition={{ duration: 0.2 }}
+      className="space-y-2 pb-20"
     >
       {/* Search Bar */}
-      <div className="relative">
+      <div className="relative mb-4">
         <Search size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" />
         <input
           type="text"
@@ -99,124 +304,43 @@ export function Feed() {
         )}
       </div>
 
-      {/* Categories */}
-      <div className="flex gap-2 overflow-x-auto pb-2 -mx-4 px-4 scrollbar-hide">
-        <button
-          onClick={() => { setCategoryFilter(null); setIsMyPostsMode(false); }}
-          className={cn(
-            'px-3 py-1.5 rounded-lg text-sm font-medium whitespace-nowrap transition-all',
-            !categoryFilter && !isMyPostsMode ? 'bg-gray-900 text-white' : 'bg-gray-100 text-gray-600'
-          )}
-        >
-          Все
-        </button>
+      {/* Banner Carousel */}
+      <BannerCarousel />
 
-        {role === 'exchanger' && (
-          <button
-            onClick={() => { setIsMyPostsMode(true); setCategoryFilter(null); }}
-            className={cn(
-              'px-3 py-1.5 rounded-lg text-sm font-medium whitespace-nowrap transition-all',
-              isMyPostsMode ? 'bg-gray-900 text-white' : 'bg-gray-100 text-gray-600'
-            )}
-          >
-            Мои
-          </button>
-        )}
+      {/* Hot Deals - Horizontal Swimlane */}
+      <SwimLane
+        title="Горячие предложения"
+        icon={Flame}
+        posts={hotPosts}
+        onPostClick={handlePostClick}
+        gradient="bg-gradient-to-br from-orange-500 to-red-500"
+      />
 
-        {['USD', 'RUB', 'EGP', 'USDT'].map((cat) => (
-          <button
-            key={cat}
-            onClick={() => { setCategoryFilter(cat); setIsMyPostsMode(false); }}
-            className={cn(
-              'px-3 py-1.5 rounded-lg text-sm font-medium whitespace-nowrap transition-all',
-              categoryFilter === cat ? 'bg-gray-900 text-white' : 'bg-gray-100 text-gray-600'
-            )}
-          >
-            {cat}
-          </button>
-        ))}
+      {/* Top Rated - Horizontal Swimlane */}
+      <SwimLane
+        title="Лучший курс"
+        icon={TrendingUp}
+        posts={topRatedPosts}
+        onPostClick={handlePostClick}
+        gradient="bg-gradient-to-br from-green-500 to-emerald-500"
+      />
 
-        {role === 'exchanger' && !showAddCategory && (
-          <button
-            onClick={() => setShowAddCategory(true)}
-            className="p-1.5 rounded-lg bg-gray-100 text-gray-600"
-          >
-            <Plus size={14} />
-          </button>
-        )}
+      {/* Featured - Horizontal Swimlane */}
+      <SwimLane
+        title="Рекомендуемые"
+        icon={Sparkles}
+        posts={featuredPosts}
+        onPostClick={handlePostClick}
+        gradient="bg-gradient-to-br from-purple-500 to-pink-500"
+      />
 
-        {showAddCategory && (
-          <div className="flex items-center gap-1">
-            <input
-              autoFocus
-              value={newCategory}
-              onChange={(e) => setNewCategory(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && handleAddCategory()}
-              placeholder="..."
-              className="w-16 px-2 py-1 text-sm bg-white border border-gray-200 rounded-lg"
-            />
-            <button onClick={handleAddCategory} className="p-1 bg-gray-900 text-white rounded">
-              <Check size={12} />
-            </button>
+      {allPosts.length === 0 && (
+        <div className="text-center py-16">
+          <div className="w-16 h-16 bg-gray-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
+            <Search size={24} className="text-gray-400" />
           </div>
-        )}
-      </div>
-
-      {/* Posts Grid - 3 columns, square */}
-      <div className="grid grid-cols-3 gap-2">
-        {filteredPosts.map((post) => (
-          <div
-            key={post.id}
-            onClick={() => handlePostClick(post)}
-            className="aspect-square bg-white rounded-xl border border-gray-100 overflow-hidden cursor-pointer hover:shadow-md transition-all relative"
-          >
-            {/* Background Image or Gradient */}
-            {(post.thumbnailUrl || post.image_data) ? (
-              <img
-                src={post.thumbnailUrl || post.image_data}
-                alt=""
-                className="w-full h-full object-cover"
-              />
-            ) : (
-              <div className="w-full h-full bg-gradient-to-br from-gray-50 to-gray-100 flex flex-col items-center justify-center p-2">
-                <div className="text-lg font-bold text-gray-800">{post.currency || 'USD'}</div>
-                {post.rate && (
-                  <div className="text-sm font-semibold text-green-600">{post.rate}</div>
-                )}
-              </div>
-            )}
-
-            {/* Overlay with info */}
-            <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/70 to-transparent p-2">
-              {post.amount && (
-                <div className="text-white text-xs font-medium">
-                  {post.amount?.toLocaleString()} {post.currency}
-                </div>
-              )}
-              {post.location && (
-                <div className="text-white/70 text-[10px] flex items-center gap-0.5">
-                  <MapPin size={8} />
-                  {post.location}
-                </div>
-              )}
-            </div>
-
-            {/* Own post badge */}
-            {isOwnPost(post) && (
-              <div className="absolute top-1 right-1 bg-gray-900 text-white text-[8px] px-1.5 py-0.5 rounded">
-                Ваш
-              </div>
-            )}
-          </div>
-        ))}
-      </div>
-
-      {filteredPosts.length === 0 && (
-        <div className="text-center py-12">
-          <div className="w-12 h-12 bg-gray-100 rounded-xl flex items-center justify-center mx-auto mb-3">
-            <Search size={20} className="text-gray-400" />
-          </div>
-          <p className="text-gray-500 text-sm">Нет постов</p>
+          <p className="text-gray-500">Пока нет постов</p>
+          <p className="text-sm text-gray-400 mt-1">Станьте первым обменником!</p>
         </div>
       )}
     </motion.div>

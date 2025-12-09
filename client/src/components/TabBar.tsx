@@ -36,9 +36,6 @@ export function TabBar() {
           const isAddPost = tab.key === 'add_post';
 
           if (isAddPost) {
-            if (activeTab === 'offers') {
-              return <div key="add_post" className="w-14" />;
-            }
             return (
               <button
                 key="add_post"

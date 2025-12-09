@@ -1,16 +1,47 @@
-import { CheckCircle2 } from 'lucide-react';
+import { Sparkles, Shield, Zap } from 'lucide-react';
 import { useStore } from '@/hooks/useStore';
 import { t } from '@/lib/i18n';
 import { Button } from './ui/button';
 import { motion } from 'framer-motion';
 
+// Beautiful NellX Logo
+function NellXLogo() {
+  return (
+    <div className="flex items-center justify-center gap-1">
+      <span className="text-5xl font-black tracking-tight text-gray-900">Nell</span>
+      <div className="relative">
+        <span className="text-5xl font-black text-gray-900">X</span>
+        {/* Arrow decorations */}
+        <svg
+          className="absolute -top-1 -right-3 w-4 h-4 text-gray-900"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="3"
+        >
+          <path d="M7 17L17 7M17 7H7M17 7V17" />
+        </svg>
+        <svg
+          className="absolute -bottom-1 -right-3 w-4 h-4 text-gray-900 rotate-180"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="3"
+        >
+          <path d="M7 17L17 7M17 7H7M17 7V17" />
+        </svg>
+      </div>
+    </div>
+  );
+}
+
 export function Onboarding() {
   const { language, setOnboardingSeen, openLogin } = useStore();
 
   const features = [
-    t('welcomeFeature1', language),
-    t('welcomeFeature2', language),
-    t('welcomeFeature3', language)
+    { icon: Zap, text: t('welcomeFeature1', language), color: 'bg-amber-500' },
+    { icon: Shield, text: t('welcomeFeature2', language), color: 'bg-blue-500' },
+    { icon: Sparkles, text: t('welcomeFeature3', language), color: 'bg-emerald-500' },
   ];
 
   const handleGetStarted = () => {
@@ -18,7 +49,6 @@ export function Onboarding() {
   };
 
   const handleLoginClick = () => {
-    // First mark onboarding as seen, then open login
     setOnboardingSeen(true);
     openLogin();
   };
@@ -28,43 +58,63 @@ export function Onboarding() {
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
-      transition={{ duration: 0.15 }}
+      transition={{ duration: 0.3 }}
       className="flex flex-col items-center justify-center min-h-screen p-6 bg-white"
     >
       <div className="w-full max-w-md space-y-8">
+        {/* Logo */}
         <motion.div
-          initial={{ y: 20, opacity: 0 }}
-          animate={{ y: 0, opacity: 1 }}
-          transition={{ delay: 0.1, duration: 0.2 }}
-          className="text-center space-y-3"
+          initial={{ scale: 0.9, opacity: 0 }}
+          animate={{ scale: 1, opacity: 1 }}
+          transition={{ type: "spring", stiffness: 200, damping: 15 }}
+          className="flex justify-center"
         >
-          <h1 className="text-4xl font-bold">{t('appName', language)}</h1>
-          <p className="text-gray-500">{t('welcomeTitle', language)}</p>
+          <NellXLogo />
         </motion.div>
 
+        {/* Subtitle */}
+        <motion.p
+          initial={{ y: 20, opacity: 0 }}
+          animate={{ y: 0, opacity: 1 }}
+          transition={{ delay: 0.2 }}
+          className="text-center text-gray-500 text-lg"
+        >
+          {t('welcomeTitle', language)}
+        </motion.p>
+
+        {/* Features */}
         <motion.div
           initial={{ y: 20, opacity: 0 }}
           animate={{ y: 0, opacity: 1 }}
-          transition={{ delay: 0.2, duration: 0.2 }}
-          className="space-y-4"
+          transition={{ delay: 0.3 }}
+          className="space-y-3"
         >
           {features.map((feature, index) => (
-            <div key={index} className="flex items-start gap-3">
-              <CheckCircle2 className="w-5 h-5 text-gray-900 mt-0.5 flex-shrink-0" />
-              <p className="text-gray-700">{feature}</p>
-            </div>
+            <motion.div
+              key={index}
+              initial={{ x: -20, opacity: 0 }}
+              animate={{ x: 0, opacity: 1 }}
+              transition={{ delay: 0.4 + index * 0.1 }}
+              className="flex items-center gap-4 p-4 bg-gray-50 rounded-2xl"
+            >
+              <div className={`w-12 h-12 rounded-xl ${feature.color} flex items-center justify-center flex-shrink-0`}>
+                <feature.icon className="w-6 h-6 text-white" />
+              </div>
+              <p className="text-gray-700 font-medium">{feature.text}</p>
+            </motion.div>
           ))}
         </motion.div>
 
+        {/* Buttons */}
         <motion.div
           initial={{ y: 20, opacity: 0 }}
           animate={{ y: 0, opacity: 1 }}
-          transition={{ delay: 0.3, duration: 0.2 }}
+          transition={{ delay: 0.7 }}
           className="space-y-3 pt-4"
         >
           <Button
             onClick={handleGetStarted}
-            className="w-full py-3 bg-gray-900 hover:bg-gray-800 text-white rounded-xl font-medium"
+            className="w-full py-4 bg-gray-900 hover:bg-gray-800 text-white rounded-2xl font-semibold text-lg"
           >
             {t('getStarted', language)}
           </Button>
@@ -72,11 +122,16 @@ export function Onboarding() {
           <Button
             onClick={handleLoginClick}
             variant="outline"
-            className="w-full py-3 border border-gray-200 text-gray-700 hover:bg-gray-50 rounded-xl font-medium"
+            className="w-full py-4 border-2 border-gray-200 text-gray-700 hover:bg-gray-50 rounded-2xl font-semibold text-lg"
           >
             {t('alreadyHaveAccount', language)}
           </Button>
         </motion.div>
+
+        {/* Footer */}
+        <p className="text-center text-xs text-gray-400 pt-2">
+          P2P Exchange
+        </p>
       </div>
     </motion.div>
   );

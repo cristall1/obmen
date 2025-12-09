@@ -5,7 +5,8 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.filters import Command
 from bot.database.database import (
     create_order, get_order, place_bid, accept_bid, get_order_bids,
-    get_exchangers_by_location, get_user, update_user_role
+    get_exchangers_by_location, get_user, update_user_role,
+    update_bid_message_id, get_rejected_bids_with_messages, get_order_client_id
 )
 from config import WEBAPP_URL
 import logging
@@ -340,6 +341,10 @@ async def start_bid(callback: CallbackQuery, state: FSMContext):
         await callback.answer("❌ Заявка не найдена", show_alert=True)
         return
     
+    if order['status'] != 'active':
+        await callback.answer("❌ Заявка уже закрыта", show_alert=True)
+        return
+    
     await state.update_data(order_id=order_id, order=dict(order))
     await state.set_state(BidStates.waiting_for_rate)
     
@@ -394,15 +399,15 @@ async def on_bid_comment(message: Message, state: FSMContext, bot: Bot):
 
 
 async def submit_bid(event, state: FSMContext, bot: Bot):
-    """Submit the bid and notify client"""
+    """Submit the bid and notify client with Uber-like notification"""
     data = await state.get_data()
     user_id = event.from_user.id
     message = event.message if isinstance(event, CallbackQuery) else event
     
     # Get exchanger info for rating display
     exchanger = await get_user(user_id)
-    exchanger_name = exchanger[2] if exchanger and exchanger[2] else "Обменник"
-    rating = exchanger[7] if exchanger and len(exchanger) > 7 else 5.0
+    exchanger_name = exchanger[2] if exchanger and exchanger[2] else f"Обменник #{user_id}"
+    rating = exchanger[7] if exchanger and len(exchanger) > 7 and exchanger[7] else 5.0
     
     # Save bid
     bid_id = await place_bid(
@@ -417,40 +422,51 @@ async def submit_bid(event, state: FSMContext, bot: Bot):
     
     await message.answer(
         f"✅ <b>Предложение отправлено!</b>\n\n"
-        f"Курс: {data['rate']}\n"
-        f"Ожидайте ответа клиента.",
+        f"📄 Заявка #{data['order_id']}\n"
+        f"💰 Курс: {data['rate']}\n\n"
+        f"Ожидайте ответа клиента. Если он примет ваше предложение - вы получите уведомление.",
         parse_mode="HTML"
     )
     
-    # Notify client about new bid
+    # Notify client about new bid (Uber-like notification)
     order = data['order']
     client_id = order['user_id']
     
+    # Кнопки: принять предложение + открыть чат
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
-            text="✅ Взять", 
+            text="✅ Принять предложение", 
             callback_data=f"accept_bid:{bid_id}"
+        )],
+        [InlineKeyboardButton(
+            text=f"💬 Написать {exchanger_name}",
+            url=f"tg://user?id={user_id}"
         )],
     ])
     
     notify_text = (
         f"🔔 <b>Новое предложение!</b>\n\n"
-        f"👤 <b>{exchanger_name}</b> ⭐ {rating:.1f}\n"
-        f"💰 Курс: <b>{data['rate']}</b>\n"
+        f"━━━━━━━━━━━━━━━\n"
+        f"👤 <b>{exchanger_name}</b>\n"
+        f"⭐ Рейтинг: {rating:.1f}\n"
+        f"━━━━━━━━━━━━━━━\n\n"
+        f"💰 <b>Курс: {data['rate']}</b>\n"
     )
     
     if data.get('comment'):
-        notify_text += f"💬 {data['comment']}\n"
+        notify_text += f"💬 Комментарий: {data['comment']}\n"
     
     notify_text += f"\n📄 Заявка #{data['order_id']}"
     
     try:
-        await bot.send_message(
+        sent_msg = await bot.send_message(
             chat_id=client_id,
             text=notify_text,
             reply_markup=keyboard,
             parse_mode="HTML"
         )
+        # Save message_id for smart deletion later
+        await update_bid_message_id(bid_id, sent_msg.message_id)
     except Exception as e:
         logging.error(f"Failed to notify client {client_id}: {e}")
 
@@ -459,73 +475,110 @@ async def submit_bid(event, state: FSMContext, bot: Bot):
 
 @router.callback_query(F.data.startswith("accept_bid:"))
 async def on_accept_bid(callback: CallbackQuery, bot: Bot):
-    """Client accepts a bid"""
+    """Client accepts a bid - Uber-like flow"""
     bid_id = int(callback.data.split(":")[1])
+    client_id = callback.from_user.id
     
     # Accept bid in database
     bid = await accept_bid(bid_id)
     
     if not bid:
-        await callback.answer("❌ Предложение не найдено", show_alert=True)
+        await callback.answer("❌ Предложение не найдено или уже обработано", show_alert=True)
         return
     
     order = await get_order(bid['order_id'])
     exchanger = await get_user(bid['exchanger_id'])
-    client = await get_user(callback.from_user.id)
+    client = await get_user(client_id)
     
     exchanger_username = exchanger[2] if exchanger and exchanger[2] else None
-    exchanger_phone = exchanger[5] if exchanger and len(exchanger) > 5 else "Не указан"
-    client_phone = client[5] if client and len(client) > 5 else "Не указан"
+    exchanger_name = exchanger_username or f"Обменник #{bid['exchanger_id']}"
+    exchanger_phone = exchanger[5] if exchanger and len(exchanger) > 5 else None
+    client_phone = client[5] if client and len(client) > 5 else None
+    client_name = client[2] if client and client[2] else f"Клиент #{client_id}"
     
-    # Update message for client
-    contact_text = ""
+    # ==== UPDATE CLIENT'S MESSAGE (the one they clicked) ====
+    contact_info = f"👤 <b>{exchanger_name}</b>\n"
     if exchanger_username:
-        contact_text = f"\n👤 Обменник: @{exchanger_username.replace('@', '')}"
+        contact_info += f"📱 @{exchanger_username.replace('@', '')}\n"
     if exchanger_phone:
-        contact_text += f"\n📞 Телефон: {exchanger_phone}"
+        contact_info += f"📞 {exchanger_phone}\n"
+    
+    client_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text=f"💬 Написать {exchanger_name}",
+            url=f"tg://user?id={bid['exchanger_id']}"
+        )],
+    ])
     
     await callback.message.edit_text(
-        f"✅ <b>Вы выбрали обменника!</b>\n\n"
-        f"💰 Курс: {bid['rate']}\n"
-        f"📄 Заявка #{bid['order_id']}"
-        f"{contact_text}\n\n"
+        f"✅ <b>Предложение принято!</b>\n\n"
+        f"━━━━━━━━━━━━━━━\n"
+        f"{contact_info}"
+        f"━━━━━━━━━━━━━━━\n\n"
+        f"💰 Курс: <b>{bid['rate']}</b>\n"
+        f"📄 Заявка #{bid['order_id']}\n\n"
         f"Свяжитесь с обменником для завершения сделки.",
+        reply_markup=client_keyboard,
         parse_mode="HTML"
     )
     
-    # Notify exchanger - they got the deal!
+    # ==== NOTIFY EXCHANGER - THEY GOT THE DEAL! ====
+    exchanger_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text=f"💬 Написать {client_name}",
+            url=f"tg://user?id={client_id}"
+        )],
+    ])
+    
+    client_contact = f"👤 <b>{client_name}</b>\n"
+    if client_phone:
+        client_contact += f"📞 {client_phone}\n"
+    
     notify_text = (
         f"🎉 <b>Ваше предложение принято!</b>\n\n"
+        f"━━━━━━━━━━━━━━━\n"
         f"📄 Заявка #{bid['order_id']}\n"
         f"💱 {order['currency']}\n"
         f"💰 Сумма: {order['amount']}\n"
-        f"📍 {order['location']}\n\n"
-        f"📞 Телефон клиента: {client_phone}\n\n"
-        f"Свяжитесь с клиентом для завершения сделки."
+        f"📍 {order['location']}\n"
+        f"━━━━━━━━━━━━━━━\n\n"
+        f"<b>Контакты клиента:</b>\n"
+        f"{client_contact}\n"
+        f"Свяжитесь с клиентом для завершения сделки!"
     )
     
     try:
         await bot.send_message(
             chat_id=bid['exchanger_id'],
             text=notify_text,
+            reply_markup=exchanger_keyboard,
             parse_mode="HTML"
         )
     except Exception as e:
         logging.error(f"Failed to notify exchanger: {e}")
     
-    # Notify other bidders that order was taken
-    all_bids = await get_order_bids(bid['order_id'])
-    for other_bid in all_bids:
-        if other_bid['exchanger_id'] != bid['exchanger_id']:
+    # ==== SMART DELETION: Delete other bid notifications from client's chat ====
+    rejected_bids = await get_rejected_bids_with_messages(bid['order_id'], bid_id)
+    for rejected_bid in rejected_bids:
+        if rejected_bid['message_id']:
             try:
-                await bot.send_message(
-                    chat_id=other_bid['exchanger_id'],
-                    text=f"❌ Заявка #{bid['order_id']} закрыта.\n"
-                         f"Клиент выбрал другого обменника.",
-                    parse_mode="HTML"
+                await bot.delete_message(
+                    chat_id=client_id,
+                    message_id=rejected_bid['message_id']
                 )
             except Exception as e:
-                logging.error(f"Failed to notify other bidder: {e}")
+                logging.warning(f"Failed to delete rejected bid message: {e}")
+        
+        # Notify rejected exchanger
+        try:
+            await bot.send_message(
+                chat_id=rejected_bid['exchanger_id'],
+                text=f"❌ К сожалению, заявка #{rejected_bid['order_id']} закрыта.\n"
+                     f"Клиент выбрал другого обменника.",
+                parse_mode="HTML"
+            )
+        except Exception as e:
+            logging.warning(f"Failed to notify rejected exchanger: {e}")
     
     await callback.answer("✅ Обменник выбран!")
 

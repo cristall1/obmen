@@ -20,7 +20,8 @@ async def menu_admin(callback: types.CallbackQuery):
         "🛠 <b>Админ-панель</b>\n\n"
         "/stats — статистика\n"
         "/broadcast — рассылка по всем пользователям\n"
-        "/export_db — скачать базу данных"
+        "/export_db — скачать базу данных\n"
+        "/clearall — <b>очистить всех пользователей и посты</b>"
     )
     await callback.message.edit_text(text, parse_mode="HTML", reply_markup=get_main_menu_keyboard(callback.from_user.id))
 
@@ -34,7 +35,8 @@ async def cmd_admin(message: types.Message):
         "🛠 <b>Админ-панель</b>\n\n"
         "/stats — статистика\n"
         "/broadcast — рассылка по всем пользователям\n"
-        "/export_db — скачать базу данных"
+        "/export_db — скачать базу данных\n"
+        "/clearall — <b>очистить всех пользователей и посты</b>"
     )
     await message.answer(text, parse_mode="HTML")
 
@@ -60,6 +62,36 @@ async def cmd_export_db(message: types.Message):
 
     file = types.FSInputFile(DB_NAME)
     await message.answer_document(file, caption="📦 Backup базы данных")
+
+
+@router.message(Command("clearall"))
+async def cmd_clear_all(message: types.Message):
+    """Admin command to clear all users and posts for testing"""
+    if message.from_user.id not in ADMIN_IDS:
+        return
+
+    async with aiosqlite.connect(DB_NAME) as db:
+        # Delete all market posts
+        await db.execute("DELETE FROM market_posts")
+        # Delete all web accounts
+        await db.execute("DELETE FROM web_accounts")
+        # Delete all users (except admins)
+        admin_ids_str = ",".join(str(id) for id in ADMIN_IDS)
+        await db.execute(f"DELETE FROM users WHERE telegram_id NOT IN ({admin_ids_str})")
+        # Delete verification codes
+        await db.execute("DELETE FROM web_verification_codes")
+        await db.execute("DELETE FROM seller_codes")
+        await db.execute("DELETE FROM bot_verification_codes")
+        await db.commit()
+
+    await message.answer(
+        "🗑 <b>Очистка завершена!</b>\n\n"
+        "✅ Все пользователи удалены\n"
+        "✅ Все посты удалены\n"
+        "✅ Все коды верификации удалены\n\n"
+        "Теперь можно тестировать с нуля.",
+        parse_mode="HTML"
+    )
 
 
 class AdminState(StatesGroup):

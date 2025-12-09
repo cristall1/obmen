@@ -1,22 +1,59 @@
 import os
 import json
 import logging
-from aiohttp import web
+import asyncio
+from aiohttp import web, WSMsgType
 from bot.database.database import (
     get_user, update_user_role, create_order, get_active_orders, 
-    get_user_orders, place_bid, get_order_bids, create_market_post, get_market_posts
+    get_user_orders, place_bid, get_order_bids, create_market_post, get_market_posts,
+    verify_seller_code
 )
+
+# WebSocket clients for real-time updates
+ws_clients = set()
+
+async def broadcast_update(event_type: str, data: dict):
+    """Broadcast update to all connected WebSocket clients"""
+    message = json.dumps({"type": event_type, "data": data})
+    disconnected = set()
+    for ws in ws_clients:
+        try:
+            await ws.send_str(message)
+        except:
+            disconnected.add(ws)
+    ws_clients.difference_update(disconnected)
 
 # Middleware to log all requests
 @web.middleware
 async def log_requests(request, handler):
-    # print(f"Incoming request: {request.method} {request.path}")
     logging.info(f"Incoming request: {request.method} {request.path}")
     return await handler(request)
 
 routes = web.RouteTableDef()
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CLIENT_DIST_DIR = os.path.join(BASE_DIR, 'client', 'dist')
+
+@routes.get('/ws')
+async def websocket_handler(request):
+    """WebSocket endpoint for real-time updates"""
+    ws = web.WebSocketResponse()
+    await ws.prepare(request)
+    
+    ws_clients.add(ws)
+    logging.info(f"WebSocket client connected. Total: {len(ws_clients)}")
+    
+    try:
+        async for msg in ws:
+            if msg.type == WSMsgType.TEXT:
+                # Handle incoming messages if needed
+                pass
+            elif msg.type == WSMsgType.ERROR:
+                logging.error(f'WebSocket error: {ws.exception()}')
+    finally:
+        ws_clients.discard(ws)
+        logging.info(f"WebSocket client disconnected. Total: {len(ws_clients)}")
+    
+    return ws
 
 @routes.get('/')
 async def handle_index(request):
@@ -160,10 +197,17 @@ async def handle_request_seller_code(request):
                 parse_mode="HTML"
             )
             logging.info(f"Seller code sent to {telegram_id}")
+            return web.json_response({'success': True, 'code_sent': True})
         except Exception as e:
+            error_msg = str(e).lower()
             logging.error(f"Failed to send seller code to {telegram_id}: {e}")
+            # Check if bot is blocked
+            if 'blocked' in error_msg or 'forbidden' in error_msg or 'chat not found' in error_msg:
+                return web.json_response({'error': 'BOT_BLOCKED'}, status=400)
+            return web.json_response({'error': 'send_failed'}, status=500)
     
-    return web.json_response({'success': True, 'code_sent': True})
+    return web.json_response({'error': 'bot_not_available'}, status=500)
+
 
 @routes.post('/api/auth/verify-seller')
 async def handle_verify_seller(request):
@@ -171,12 +215,15 @@ async def handle_verify_seller(request):
     data = await request.json()
     code = data.get('code', '').strip()
     account_id = data.get('account_id')
+    telegram_id = data.get('telegram_id')
     
-    if not code or not account_id:
-        return web.json_response({'error': 'missing_data'}, status=400)
+    if not code:
+        return web.json_response({'error': 'missing_code'}, status=400)
     
-    from bot.database.database import verify_seller_code
-    success = await verify_seller_code(code, account_id)
+    if not account_id and not telegram_id:
+        return web.json_response({'error': 'missing_id'}, status=400)
+    
+    success = await verify_seller_code(code, account_id=account_id, telegram_id=telegram_id)
     
     if success:
         return web.json_response({'success': True})
@@ -237,6 +284,20 @@ async def handle_update_user(request):
     await update_user_profile(user_id, phone, username, name)
     return web.json_response({'status': 'ok'})
 
+@routes.post('/api/user/avatar')
+async def handle_update_avatar(request):
+    """Update user avatar"""
+    data = await request.json()
+    account_id = data.get('account_id')
+    avatar_url = data.get('avatar_url')
+    
+    if not account_id:
+        return web.json_response({'error': 'Missing account_id'}, status=400)
+    
+    from bot.database.database import update_avatar
+    await update_avatar(int(account_id), avatar_url)
+    return web.json_response({'status': 'ok'})
+
 @routes.get('/api/user/stats')
 async def handle_get_stats(request):
     user_id = request.query.get('user_id')
@@ -258,34 +319,28 @@ async def handle_create_order(request):
         data['delivery_type']
     )
 
-    # Notify Exchangers
+    # Notify Exchangers with Uber-like notification
     try:
         from bot.database.database import get_exchangers_by_location
-        from bot.locales import get_message
-        from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
-        
-        # TODO: Move this to config or pass dynamically
-        WEBAPP_URL = os.getenv('WEBAPP_URL', "https://b240298a9e5bd5.lhr.life") 
+        from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
         exchangers = await get_exchangers_by_location(data['location'])
         bot = request.app['bot']
         
         for exchanger in exchangers:
             exchanger_id = exchanger['telegram_id']
-            lang = exchanger['language'] or 'ru'
             
             if exchanger_id != int(data['user_id']): # Don't notify self
-                text = get_message(lang, 'new_order', 
-                    order_id=order_id,
-                    amount=data['amount'],
-                    currency=data['currency'],
-                    location=data['location'],
-                    delivery_type=data['delivery_type']
+                text = (
+                    f"🔔 <b>Новая заявка #{order_id}</b>\n\n"
+                    f"💰 <b>{data['amount']} {data['currency']}</b>\n"
+                    f"📍 {data['location']}\n"
+                    f"🚗 {data['delivery_type']}\n\n"
+                    f"Предложите свой курс!"
                 )
                 
                 kb = InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text=get_message(lang, 'make_offer'), callback_data=f"make_offer:{order_id}")],
-                    [InlineKeyboardButton(text=get_message(lang, 'open_order'), web_app=WebAppInfo(url=WEBAPP_URL))]
+                    [InlineKeyboardButton(text="💰 Предложить курс", callback_data=f"bid_order:{order_id}")],
                 ])
 
                 try:
@@ -295,6 +350,15 @@ async def handle_create_order(request):
 
     except Exception as e:
         logging.error(f"Notification error: {e}")
+
+    # Broadcast to WebSocket clients for real-time update
+    await broadcast_update('new_order', {
+        'id': order_id,
+        'amount': data['amount'],
+        'currency': data['currency'],
+        'location': data['location'],
+        'user_id': int(data['user_id'])
+    })
 
     return web.json_response({'id': order_id, 'status': 'ok'})
 
@@ -309,17 +373,77 @@ async def handle_get_my_orders(request):
     orders = await get_user_orders(int(user_id))
     return web.json_response(orders)
 
+@routes.post('/api/orders/{id}/cancel')
+async def handle_cancel_order(request):
+    order_id = int(request.match_info['id'])
+    try:
+        from bot.database.database import cancel_order
+        await cancel_order(order_id)
+        return web.json_response({'status': 'ok'})
+    except Exception as e:
+        logging.error(f"Failed to cancel order: {e}")
+        return web.json_response({'error': str(e)}, status=500)
+
 @routes.post('/api/bids')
 async def handle_place_bid(request):
     data = await request.json()
-    await place_bid(
+    bid_id = await place_bid(
         int(data['order_id']),
         int(data['exchanger_id']),
         float(data['rate']),
-        data['time_estimate'],
-        data['comment']
+        data.get('time_estimate', '15'),
+        data.get('comment', '')
     )
-    return web.json_response({'status': 'ok'})
+    
+    # Notify client with Uber-like notification
+    try:
+        from bot.database.database import get_order, get_user, update_bid_message_id
+        from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+        
+        order = await get_order(int(data['order_id']))
+        exchanger = await get_user(int(data['exchanger_id']))
+        
+        exchanger_name = exchanger[2] if exchanger and exchanger[2] else f"Обменник #{data['exchanger_id']}"
+        rating = exchanger[7] if exchanger and len(exchanger) > 7 and exchanger[7] else 5.0
+        
+        client_id = order['user_id']
+        exchanger_id = int(data['exchanger_id'])
+        
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Принять предложение", callback_data=f"accept_bid:{bid_id}")],
+            [InlineKeyboardButton(text=f"💬 Написать {exchanger_name}", url=f"tg://user?id={exchanger_id}")],
+        ])
+        
+        text = (
+            f"🔔 <b>Новое предложение!</b>\n\n"
+            f"━━━━━━━━━━━━━━━\n"
+            f"👤 <b>{exchanger_name}</b>\n"
+            f"⭐ Рейтинг: {rating:.1f}\n"
+            f"━━━━━━━━━━━━━━━\n\n"
+            f"💰 <b>Курс: {data['rate']}</b>\n"
+        )
+        if data.get('comment'):
+            text += f"💬 Комментарий: {data['comment']}\n"
+        text += f"\n📄 Заявка #{data['order_id']}"
+        
+        bot = request.app['bot']
+        sent_msg = await bot.send_message(chat_id=client_id, text=text, reply_markup=kb, parse_mode="HTML")
+        
+        # Save message_id for smart deletion
+        await update_bid_message_id(bid_id, sent_msg.message_id)
+        
+    except Exception as e:
+        logging.error(f"Failed to notify client about new bid: {e}")
+    
+    # Broadcast new bid to WebSocket clients
+    await broadcast_update('new_bid', {
+        'bid_id': bid_id,
+        'order_id': int(data['order_id']),
+        'rate': data['rate'],
+        'exchanger_id': int(data['exchanger_id'])
+    })
+    
+    return web.json_response({'status': 'ok', 'bid_id': bid_id})
 
 @routes.get('/api/bids/my')
 async def handle_get_my_bids(request):
@@ -341,39 +465,95 @@ async def handle_get_order_bids(request):
     bids = await get_order_bids(int(order_id))
     return web.json_response(bids)
 
+@routes.delete('/api/bids/completed')
+async def handle_clear_completed_bids(request):
+    """Clear completed/rejected bids for a user"""
+    user_id = request.query.get('user_id')
+    if not user_id:
+        return web.json_response({'error': 'Missing user_id'}, status=400)
+    
+    from bot.database.database import clear_completed_bids
+    await clear_completed_bids(int(user_id))
+    return web.json_response({'status': 'ok'})
+
 @routes.post('/api/bids/{id}/accept')
 async def handle_accept_bid(request):
     bid_id = int(request.match_info['id'])
+    client_id = request.query.get('client_id')  # optional, for smart deletion
     
-    from bot.database.database import accept_bid, get_user, get_order
+    from bot.database.database import accept_bid, get_user, get_order, get_rejected_bids_with_messages
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    
     bid = await accept_bid(bid_id)
     
     if not bid:
         return web.json_response({'error': 'Bid not found'}, status=404)
         
-    # Notify Exchanger
+    # Get order and user details
+    order = await get_order(bid['order_id'])
+    exchanger = await get_user(bid['exchanger_id'])
+    
+    exchanger_id = bid['exchanger_id']
+    exchanger_name = exchanger[2] if exchanger and exchanger[2] else f"Обменник #{exchanger_id}"
+    
+    order_client_id = order['user_id'] if order else (int(client_id) if client_id else None)
+    client = await get_user(order_client_id) if order_client_id else None
+    client_name = client[2] if client and client[2] else f"Клиент #{order_client_id}"
+    client_phone = client[5] if client and len(client) > 5 else None
+    
+    bot = request.app['bot']
+    
+    # Notify Exchanger with chat button
     try:
-        exchanger_id = bid['exchanger_id']
-        exchanger = await get_user(exchanger_id)
-        lang = exchanger[3] if exchanger else 'ru' # language is at index 3
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=f"💬 Написать {client_name}", url=f"tg://user?id={order_client_id}")],
+        ])
         
-        # Get order details to get client info
-        order = await get_order(bid['order_id'])
-        client_name = order.get('username') or 'Unknown'
-        client_phone = order.get('phone') or 'Unknown'
+        client_contact = f"👤 <b>{client_name}</b>\n"
+        if client_phone:
+            client_contact += f"📞 {client_phone}\n"
         
-        from bot.locales import get_message
-        text = get_message(lang, 'bid_accepted', 
-            order_id=bid['order_id'],
-            name=client_name,
-            phone=client_phone
+        text = (
+            f"🎉 <b>Ваше предложение принято!</b>\n\n"
+            f"━━━━━━━━━━━━━━━\n"
+            f"📄 Заявка #{bid['order_id']}\n"
+            f"💱 {order['currency']}\n"
+            f"💰 Сумма: {order['amount']}\n"
+            f"📍 {order['location']}\n"
+            f"━━━━━━━━━━━━━━━\n\n"
+            f"<b>Контакты клиента:</b>\n"
+            f"{client_contact}\n"
+            f"Свяжитесь с клиентом для завершения сделки!"
         )
         
-        bot = request.app['bot']
-        await bot.send_message(chat_id=exchanger_id, text=text, parse_mode="HTML")
+        await bot.send_message(chat_id=exchanger_id, text=text, reply_markup=kb, parse_mode="HTML")
         
     except Exception as e:
         logging.error(f"Failed to notify exchanger about accepted bid: {e}")
+    
+    # Smart deletion: Delete rejected bids from client's chat
+    if order_client_id:
+        rejected_bids = await get_rejected_bids_with_messages(bid['order_id'], bid_id)
+        for rejected_bid in rejected_bids:
+            if rejected_bid['message_id']:
+                try:
+                    await bot.delete_message(
+                        chat_id=order_client_id,
+                        message_id=rejected_bid['message_id']
+                    )
+                except Exception as e:
+                    logging.warning(f"Failed to delete rejected bid message: {e}")
+            
+            # Notify rejected exchanger
+            try:
+                await bot.send_message(
+                    chat_id=rejected_bid['exchanger_id'],
+                    text=f"❌ К сожалению, заявка #{rejected_bid['order_id']} закрыта.\n"
+                         f"Клиент выбрал другого обменника.",
+                    parse_mode="HTML"
+                )
+            except Exception as e:
+                logging.warning(f"Failed to notify rejected exchanger: {e}")
 
     return web.json_response({'status': 'ok', 'order_id': bid['order_id']})
 
@@ -407,6 +587,63 @@ async def handle_get_my_posts(request):
     from bot.database.database import get_user_market_posts
     posts = await get_user_market_posts(int(user_id))
     return web.json_response(posts)
+
+@routes.get('/api/users/{id}')
+async def handle_get_user_profile(request):
+    """Get user profile by ID"""
+    user_id = int(request.match_info['id'])
+    
+    # Try web_accounts first, then users table
+    from bot.database.database import get_web_account_by_telegram_id
+    account = await get_web_account_by_telegram_id(user_id)
+    
+    if account:
+        return web.json_response({
+            'id': user_id,
+            'name': account.get('name') or account.get('nickname', 'User'),
+            'avatar_url': account.get('avatar_url'),
+            'role': account.get('role', 'client'),
+            'rating': 5.0,
+            'deals_count': 0
+        })
+    
+    # Fallback to users table
+    user = await get_user(user_id)
+    if user:
+        return web.json_response({
+            'id': user_id,
+            'name': user[2] or 'User',  # username
+            'avatar_url': None,
+            'role': user[6] if len(user) > 6 else 'client',
+            'rating': user[7] if len(user) > 7 else 5.0,
+            'deals_count': user[8] if len(user) > 8 else 0
+        })
+    
+    # Create basic user data if nothing found
+    return web.json_response({
+        'id': user_id,
+        'name': f'User {user_id}',
+        'avatar_url': None,
+        'role': 'client',
+        'rating': 5.0,
+        'deals_count': 0
+    })
+
+@routes.get('/api/users/{id}/posts')
+async def handle_get_user_posts(request):
+    """Get posts by user ID"""
+    user_id = int(request.match_info['id'])
+    from bot.database.database import get_user_market_posts
+    posts = await get_user_market_posts(user_id)
+    return web.json_response(posts)
+
+@routes.get('/api/users/{id}/reviews')
+async def handle_get_user_reviews(request):
+    """Get reviews for user"""
+    user_id = int(request.match_info['id'])
+    from bot.database.database import get_user_reviews
+    reviews = await get_user_reviews(user_id)
+    return web.json_response(reviews)
 
 @routes.get('/api/posts/{id}')
 async def handle_get_post(request):
@@ -632,7 +869,8 @@ async def accept_deal(request):
 
 
 async def init_web_app(bot):
-    app = web.Application(middlewares=[log_requests])
+    # Increase max size to 10MB for image uploads
+    app = web.Application(middlewares=[log_requests], client_max_size=10*1024*1024)
     app['bot'] = bot
     app.add_routes(routes)
     return app

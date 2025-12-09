@@ -157,12 +157,14 @@ async def create_tables():
                 time_estimate TEXT,
                 comment TEXT,
                 status TEXT DEFAULT 'pending', -- 'pending', 'accepted', 'rejected'
+                message_id INTEGER, -- Telegram message ID for smart deletion
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY(order_id) REFERENCES orders(id),
                 FOREIGN KEY(exchanger_id) REFERENCES users(telegram_id)
             )
         """)
         await _ensure_column(db, "bids", "status", "TEXT DEFAULT 'pending'")
+        await _ensure_column(db, "bids", "message_id", "INTEGER")
 
         await db.execute("""
             CREATE TABLE IF NOT EXISTS market_posts (
@@ -540,6 +542,12 @@ async def get_order(order_id: int):
             row = await cursor.fetchone()
             return dict(row) if row else None
 
+async def cancel_order(order_id: int):
+    """Cancel an order"""
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute("UPDATE orders SET status = 'cancelled' WHERE id = ?", (order_id,))
+        await db.commit()
+
 async def place_bid(order_id: int, exchanger_id: int, rate: float, time_estimate: str, comment: str):
     async with aiosqlite.connect(DB_NAME) as db:
         cursor = await db.execute("""
@@ -579,11 +587,44 @@ async def get_order_bids(order_id: int):
         async with db.execute("""
             SELECT b.*, u.rating, u.deals_count 
             FROM bids b
-            JOIN users u ON b.exchanger_id = u.telegram_id
+            LEFT JOIN users u ON b.exchanger_id = u.telegram_id
             WHERE b.order_id = ?
             ORDER BY b.rate DESC
         """, (order_id,)) as cursor:
             return [dict(row) for row in await cursor.fetchall()]
+
+async def update_bid_message_id(bid_id: int, message_id: int):
+    """Store the Telegram message ID for a bid notification"""
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute("UPDATE bids SET message_id = ? WHERE id = ?", (message_id, bid_id))
+        await db.commit()
+
+async def clear_completed_bids(user_id: int):
+    """Delete completed/rejected bids for a user"""
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute(
+            "DELETE FROM bids WHERE exchanger_id = ? AND status IN ('accepted', 'rejected')",
+            (user_id,)
+        )
+        await db.commit()
+
+async def get_rejected_bids_with_messages(order_id: int, accepted_bid_id: int):
+    """Get all rejected bids with their message_ids for cleanup"""
+    async with aiosqlite.connect(DB_NAME) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("""
+            SELECT id, exchanger_id, message_id, order_id 
+            FROM bids 
+            WHERE order_id = ? AND id != ? AND message_id IS NOT NULL
+        """, (order_id, accepted_bid_id)) as cursor:
+            return [dict(row) for row in await cursor.fetchall()]
+
+async def get_order_client_id(order_id: int):
+    """Get the client's telegram ID for an order"""
+    async with aiosqlite.connect(DB_NAME) as db:
+        async with db.execute("SELECT user_id FROM orders WHERE id = ?", (order_id,)) as cursor:
+            row = await cursor.fetchone()
+            return row[0] if row else None
 
 async def get_user_bids(user_id: int):
     async with aiosqlite.connect(DB_NAME) as db:
@@ -613,11 +654,32 @@ async def get_market_posts():
             return [dict(row) for row in await cursor.fetchall()]
 
 async def get_exchangers_by_location(location: str = None):
-    # Simple mock for now, returns all exchangers
+    """Get all exchangers - checks both users and web_accounts tables"""
     async with aiosqlite.connect(DB_NAME) as db:
         db.row_factory = aiosqlite.Row
-        async with db.execute("SELECT telegram_id, language FROM users WHERE role = 'exchanger'") as cursor:
-            return [dict(row) for row in await cursor.fetchall()]
+        # Get from web_accounts (Bot-First registration) - include language from users table
+        async with db.execute("""
+            SELECT w.telegram_id, COALESCE(u.language, 'ru') as language 
+            FROM web_accounts w
+            LEFT JOIN users u ON w.telegram_id = u.telegram_id
+            WHERE w.role = 'exchanger' AND w.telegram_id IS NOT NULL
+        """) as cursor:
+            web_exchangers = [dict(row) for row in await cursor.fetchall()]
+        
+        # Also get from old users table for backwards compatibility
+        async with db.execute("""
+            SELECT telegram_id, COALESCE(language, 'ru') as language FROM users WHERE role = 'exchanger'
+        """) as cursor:
+            old_exchangers = [dict(row) for row in await cursor.fetchall()]
+        
+        # Combine and deduplicate
+        all_ids = set()
+        result = []
+        for ex in web_exchangers + old_exchangers:
+            if ex['telegram_id'] and ex['telegram_id'] not in all_ids:
+                all_ids.add(ex['telegram_id'])
+                result.append(ex)
+        return result
 
 async def save_verification_code(phone: str, code: str):
     async with aiosqlite.connect(DB_NAME) as db:
@@ -792,6 +854,76 @@ def generate_numeric_code(length: int = 6) -> str:
 def generate_alpha_code(length: int = 7) -> str:
     return ''.join(secrets.choice(string.ascii_lowercase) for _ in range(length))
 
+
+# ============= BOT-FIRST AUTH FUNCTIONS =============
+
+async def get_user_by_telegram_id(telegram_id: int) -> dict:
+    """Get user account by telegram_id (for Bot-First flow)"""
+    async with aiosqlite.connect(DB_NAME) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM web_accounts WHERE telegram_id = ?",
+            (telegram_id,)
+        )
+        row = await cursor.fetchone()
+        if row:
+            return dict(row)
+        return None
+
+
+async def register_user_via_bot(telegram_id: int, nickname: str, password: str, language: str = "ru") -> dict:
+    """
+    Bot-First Registration: User registers through Telegram bot.
+    Creates account with telegram_id already linked.
+    """
+    # Check if nickname is taken
+    if await check_nickname_exists(nickname):
+        return {"error": "nickname_exists"}
+    
+    # Check if telegram_id already has an account
+    existing = await get_user_by_telegram_id(telegram_id)
+    if existing:
+        return {"error": "already_registered"}
+    
+    password_hash = hash_password(password)
+    
+    async with aiosqlite.connect(DB_NAME) as db:
+        # Create web account with telegram_id pre-linked
+        cursor = await db.execute(
+            """INSERT INTO web_accounts (nickname, name, password_hash, telegram_id, role) 
+               VALUES (?, ?, ?, ?, 'client')""",
+            (nickname, nickname, password_hash, telegram_id)
+        )
+        account_id = cursor.lastrowid
+        
+        # Also ensure user exists in users table (for bot functionality)
+        await db.execute(
+            """INSERT OR IGNORE INTO users (telegram_id, language, status) 
+               VALUES (?, ?, 'active')""",
+            (telegram_id, language)
+        )
+        
+        await db.commit()
+        
+        return {
+            "success": True,
+            "account_id": account_id,
+            "nickname": nickname,
+            "telegram_id": telegram_id
+        }
+
+
+async def get_telegram_id_by_account(account_id: int) -> int:
+    """Get telegram_id linked to a web account (for Become Seller 2FA)"""
+    async with aiosqlite.connect(DB_NAME) as db:
+        cursor = await db.execute(
+            "SELECT telegram_id FROM web_accounts WHERE id = ?",
+            (account_id,)
+        )
+        row = await cursor.fetchone()
+        return row[0] if row else None
+
+
 async def check_nickname_exists(nickname: str) -> bool:
     async with aiosqlite.connect(DB_NAME) as db:
         cursor = await db.execute("SELECT id FROM web_accounts WHERE LOWER(nickname) = LOWER(?)", (nickname,))
@@ -849,9 +981,35 @@ async def login_web_account(nickname: str, password: str) -> dict:
             "nickname": row["nickname"],
             "name": row["name"],
             "role": row["role"],
+            "telegram_id": row["telegram_id"],
             "telegram_linked": row["telegram_id"] is not None,
-            "is_seller": row["is_seller_verified"] == 1
+            "is_seller": row["is_seller_verified"] == 1,
+            "avatar_url": row["avatar_url"]
         }
+
+async def update_avatar(account_id: int, avatar_url: str):
+    """Update avatar URL for account"""
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute(
+            "UPDATE web_accounts SET avatar_url = ? WHERE id = ?",
+            (avatar_url, account_id)
+        )
+        await db.commit()
+
+async def get_web_account_by_telegram_id(telegram_id: int):
+    """Get web account by telegram ID"""
+    async with aiosqlite.connect(DB_NAME) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM web_accounts WHERE telegram_id = ?",
+            (telegram_id,)
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+
+async def get_user_reviews(user_id: int):
+    """Get reviews for a user - placeholder until reviews table exists"""
+    return []
 
 async def verify_code_from_bot(code: str, telegram_id: int, phone: str) -> dict:
     """Bot verifies the code and links Telegram account"""
@@ -931,10 +1089,13 @@ async def generate_seller_code(telegram_id: int) -> str:
         await db.commit()
     return code
 
-async def verify_seller_code(code: str, account_id: int) -> bool:
-    """Verify seller code and upgrade account"""
+async def verify_seller_code(code: str, account_id: int = None, telegram_id: int = None) -> bool:
+    """Verify seller code and upgrade account. Can use either account_id or telegram_id."""
+    import logging
+    logging.info(f"verify_seller_code called: code={code}, account_id={account_id}, telegram_id={telegram_id}")
+    
     async with aiosqlite.connect(DB_NAME) as db:
-        # Find unused code
+        # Find unused code (don't check telegram_id match - user might use different device)
         cursor = await db.execute(
             "SELECT id, telegram_id FROM seller_codes WHERE LOWER(code) = LOWER(?) AND used = 0",
             (code,)
@@ -942,18 +1103,31 @@ async def verify_seller_code(code: str, account_id: int) -> bool:
         row = await cursor.fetchone()
         
         if not row:
+            logging.warning(f"Code not found or already used: {code}")
             return False
         
-        code_id, telegram_id = row
+        code_id, code_telegram_id = row
+        logging.info(f"Found code: id={code_id}, code_telegram_id={code_telegram_id}")
         
         # Mark code as used
         await db.execute("UPDATE seller_codes SET used = 1 WHERE id = ?", (code_id,))
         
-        # Upgrade account to seller
-        await db.execute(
-            "UPDATE web_accounts SET role = 'exchanger', is_seller_verified = 1 WHERE id = ?",
-            (account_id,)
-        )
+        # Upgrade account - use telegram_id from code if not provided
+        target_telegram_id = telegram_id or code_telegram_id
+        
+        if target_telegram_id:
+            await db.execute(
+                "UPDATE web_accounts SET role = 'exchanger', is_seller_verified = 1 WHERE telegram_id = ?",
+                (target_telegram_id,)
+            )
+            logging.info(f"Upgraded account with telegram_id={target_telegram_id}")
+        elif account_id:
+            await db.execute(
+                "UPDATE web_accounts SET role = 'exchanger', is_seller_verified = 1 WHERE id = ?",
+                (account_id,)
+            )
+            logging.info(f"Upgraded account with account_id={account_id}")
+        
         await db.commit()
         return True
 
@@ -1155,24 +1329,3 @@ async def generate_seller_code(telegram_id: int) -> str:
         await db.commit()
     
     return code
-
-async def verify_seller_code(code: str, account_id: int) -> bool:
-    """Verify seller code and upgrade account to exchanger"""
-    async with aiosqlite.connect(DB_NAME) as db:
-        cursor = await db.execute(
-            "SELECT telegram_id FROM seller_codes WHERE code = ? AND used = 0",
-            (code.upper(),)
-        )
-        row = await cursor.fetchone()
-        
-        if not row:
-            return False
-        
-        # Mark code as used
-        await db.execute("UPDATE seller_codes SET used = 1 WHERE code = ?", (code.upper(),))
-        
-        # Update account role to exchanger
-        await db.execute("UPDATE web_accounts SET role = 'exchanger' WHERE id = ?", (account_id,))
-        await db.commit()
-        
-        return True

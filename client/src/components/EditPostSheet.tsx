@@ -1,66 +1,81 @@
-import { useState, useEffect } from 'react';
-import { X } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { X, ImagePlus, Trash2, Loader2 } from 'lucide-react';
 import { useStore } from '@/hooks/useStore';
 import { t } from '@/lib/i18n';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
-import { SimpleSelect } from './ui/SimpleSelect';
 import { motion, AnimatePresence } from 'framer-motion';
 import { cn } from '@/lib/utils';
 
-const CATEGORIES = ['USD', 'BTC', 'UZS', 'Подписки', 'Прочее'];
-const CURRENCIES = ['EGP', 'RUB', 'USD', 'USDT', 'UZS', 'KGS', 'KZT', 'CAD', 'TJS', 'BTC'];
+const CURRENCIES = ['USD', 'EUR', 'EGP', 'RUB', 'AED', 'USDT'];
+const LOCATIONS = ['Район 4.5', 'Район 6-10', 'Ваха', 'Хургада', 'Шарм-эль-Шейх', 'Каир'];
 
 export function EditPostSheet() {
-    const { language, editingPost, setEditingPost, editPost } = useStore();
-    const [title, setTitle] = useState('');
+    const { language, editingPost, setEditingPost, editPost, fetchMarketPosts } = useStore();
+    const fileInputRef = useRef<HTMLInputElement>(null);
+
     const [amount, setAmount] = useState('');
     const [rate, setRate] = useState('');
     const [location, setLocation] = useState('');
-    const [imageUrl, setImageUrl] = useState('');
     const [description, setDescription] = useState('');
-    const [category, setCategory] = useState('USD');
-    const [acceptedCurrencies, setAcceptedCurrencies] = useState<string[]>(['USD']);
+    const [currency, setCurrency] = useState('USD');
     const [type, setType] = useState<'buy' | 'sell'>('sell');
+    const [imageData, setImageData] = useState<string | null>(null);
+    const [isSubmitting, setIsSubmitting] = useState(false);
 
     useEffect(() => {
         if (editingPost) {
-            setTitle(editingPost.title || editingPost.pair || '');
             setAmount(editingPost.amount?.toString() || '');
             setRate(editingPost.rate?.toString() || '');
             setLocation(editingPost.location || '');
-            setImageUrl(editingPost.thumbnailUrl || '');
             setDescription(editingPost.description || '');
-            setCategory(editingPost.category || 'USD');
-            setAcceptedCurrencies(editingPost.acceptedCurrencies || ['USD']);
+            setCurrency(editingPost.currency || 'USD');
             setType(editingPost.type || 'sell');
+            setImageData(editingPost.image_data || editingPost.thumbnailUrl || null);
         }
     }, [editingPost]);
 
-    const toggleCurrency = (currency: string) => {
-        if (acceptedCurrencies.includes(currency)) {
-            setAcceptedCurrencies(acceptedCurrencies.filter(c => c !== currency));
-        } else {
-            setAcceptedCurrencies([...acceptedCurrencies, currency]);
+    const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (file) {
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                setImageData(event.target?.result as string);
+            };
+            reader.readAsDataURL(file);
+        }
+    };
+
+    const handleRemoveImage = () => {
+        setImageData(null);
+        if (fileInputRef.current) {
+            fileInputRef.current.value = '';
         }
     };
 
     const handleSubmit = async () => {
-        if (!editingPost || !title.trim() || !amount || !rate || !location.trim()) {
+        if (!editingPost || !description.trim()) {
             return;
         }
 
+        setIsSubmitting(true);
         try {
             await editPost(editingPost.id, {
                 amount: parseFloat(amount) || 0,
                 rate: parseFloat(rate) || 0,
                 description,
                 type,
-                // Add other fields as needed by backend
+                currency,
+                location,
+                image_data: imageData
             });
             setEditingPost(null);
+            fetchMarketPosts();
         } catch (error) {
             console.error('Failed to update post', error);
+            alert('Ошибка сохранения');
+        } finally {
+            setIsSubmitting(false);
         }
     };
 
@@ -76,183 +91,187 @@ export function EditPostSheet() {
                         animate={{ opacity: 1 }}
                         exit={{ opacity: 0 }}
                         transition={{ duration: 0.16 }}
-                        className="fixed inset-0 bg-black/40 z-40"
+                        className="fixed inset-0 bg-black/50 z-40"
                         onClick={() => setEditingPost(null)}
                     />
 
                     {/* Modal */}
                     <motion.div
-                        initial={{ opacity: 0, y: 20 }}
+                        initial={{ opacity: 0, y: '100%' }}
                         animate={{ opacity: 1, y: 0 }}
-                        exit={{ opacity: 0, y: 20 }}
-                        transition={{ duration: 0.16, ease: 'easeOut' }}
-                        className="fixed inset-x-4 top-1/2 -translate-y-1/2 max-w-md mx-auto bg-white rounded-lg shadow-2xl z-50 max-h-[85vh] flex flex-col"
+                        exit={{ opacity: 0, y: '100%' }}
+                        transition={{ type: 'spring', damping: 25, stiffness: 300 }}
+                        className="fixed inset-x-0 bottom-0 bg-white rounded-t-2xl z-50 max-h-[90vh] flex flex-col"
                     >
                         {/* Header */}
-                        <div className="flex items-center justify-between p-4 border-b border-gray-200">
-                            <h2 className="text-title font-semibold">{t('editPost', language)}</h2>
+                        <div className="flex items-center justify-between p-4 border-b border-gray-100">
+                            <h2 className="text-base font-bold">{t('editPost', language)}</h2>
                             <button
                                 onClick={() => setEditingPost(null)}
                                 className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
-                                aria-label="Close"
                             >
-                                <X size={20} className="text-gray-500" />
+                                <X size={18} />
                             </button>
                         </div>
 
                         {/* Scrollable Content */}
-                        <div className="flex-1 overflow-y-auto p-4">
-                            <div className="space-y-4">
-                                {/* Type Toggle */}
-                                <div className="flex p-1 bg-gray-100 rounded-lg">
+                        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                            {/* Image Upload */}
+                            <div>
+                                <label className="block text-xs font-medium text-gray-500 mb-2">
+                                    <ImagePlus size={12} className="inline mr-1" />
+                                    Фото
+                                </label>
+                                <input
+                                    ref={fileInputRef}
+                                    type="file"
+                                    accept="image/*"
+                                    onChange={handleImageSelect}
+                                    className="hidden"
+                                />
+                                {imageData ? (
+                                    <div className="relative w-full aspect-video rounded-xl overflow-hidden bg-gray-100">
+                                        <img src={imageData} alt="" className="w-full h-full object-cover" />
+                                        <button
+                                            onClick={handleRemoveImage}
+                                            className="absolute top-2 right-2 w-8 h-8 bg-red-500 text-white rounded-full flex items-center justify-center hover:bg-red-600"
+                                        >
+                                            <Trash2 size={16} />
+                                        </button>
+                                    </div>
+                                ) : (
+                                    <button
+                                        onClick={() => fileInputRef.current?.click()}
+                                        className="w-full aspect-video rounded-xl border-2 border-dashed border-gray-200 flex flex-col items-center justify-center gap-2 hover:border-gray-300 hover:bg-gray-50 transition-colors"
+                                    >
+                                        <ImagePlus size={32} className="text-gray-400" />
+                                        <span className="text-sm text-gray-500">Нажмите чтобы загрузить</span>
+                                    </button>
+                                )}
+                            </div>
+
+                            {/* Type Toggle */}
+                            <div>
+                                <label className="block text-xs font-medium text-gray-500 mb-2">Тип</label>
+                                <div className="flex gap-2">
                                     <button
                                         onClick={() => setType('buy')}
                                         className={cn(
-                                            "flex-1 py-2 text-sm font-medium rounded-md transition-all",
-                                            type === 'buy' ? "bg-white shadow-sm text-green-600" : "text-gray-500 hover:text-gray-700"
+                                            "flex-1 py-3 rounded-xl font-medium transition-all",
+                                            type === 'buy'
+                                                ? "bg-blue-500 text-white"
+                                                : "bg-gray-100 text-gray-700 hover:bg-gray-200"
                                         )}
                                     >
-                                        {t('buy', language)}
+                                        Покупаю
                                     </button>
                                     <button
                                         onClick={() => setType('sell')}
                                         className={cn(
-                                            "flex-1 py-2 text-sm font-medium rounded-md transition-all",
-                                            type === 'sell' ? "bg-white shadow-sm text-red-600" : "text-gray-500 hover:text-gray-700"
+                                            "flex-1 py-3 rounded-xl font-medium transition-all",
+                                            type === 'sell'
+                                                ? "bg-orange-500 text-white"
+                                                : "bg-gray-100 text-gray-700 hover:bg-gray-200"
                                         )}
                                     >
-                                        {t('sell', language)}
+                                        Продаю
                                     </button>
                                 </div>
+                            </div>
 
+                            {/* Currency */}
+                            <div>
+                                <label className="block text-xs font-medium text-gray-500 mb-2">Валюта</label>
+                                <div className="flex flex-wrap gap-2">
+                                    {CURRENCIES.map((c) => (
+                                        <button
+                                            key={c}
+                                            onClick={() => setCurrency(c)}
+                                            className={cn(
+                                                "px-4 py-2 rounded-lg text-sm font-medium transition-all",
+                                                currency === c
+                                                    ? "bg-gray-900 text-white"
+                                                    : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                                            )}
+                                        >
+                                            {c}
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+
+                            {/* Amount & Rate */}
+                            <div className="grid grid-cols-2 gap-3">
                                 <div>
-                                    <label htmlFor="post-title" className="block text-body font-medium text-gray-900 mb-2">
-                                        {t('title', language)}
+                                    <label className="block text-xs font-medium text-gray-500 mb-2">
+                                        {t('amount', language)}
                                     </label>
                                     <Input
-                                        id="post-title"
-                                        placeholder={t('enterTitle', language)}
-                                        value={title}
-                                        onChange={(e) => setTitle(e.target.value)}
-                                        className="w-full px-4 py-3 border border-gray-200 rounded-lg text-body bg-white"
+                                        type="number"
+                                        placeholder="1000"
+                                        value={amount}
+                                        onChange={(e) => setAmount(e.target.value)}
+                                        className="w-full px-4 py-3 border border-gray-200 rounded-xl"
                                     />
                                 </div>
-
-                                <div className="grid grid-cols-2 gap-4">
-                                    <div>
-                                        <label htmlFor="post-amount" className="block text-body font-medium text-gray-900 mb-2">
-                                            {t('amount', language)}
-                                        </label>
-                                        <Input
-                                            id="post-amount"
-                                            type="number"
-                                            placeholder="1000"
-                                            value={amount}
-                                            onChange={(e) => setAmount(e.target.value)}
-                                            className="w-full px-4 py-3 border border-gray-200 rounded-lg text-body bg-white"
-                                        />
-                                    </div>
-                                    <div>
-                                        <label htmlFor="post-rate" className="block text-body font-medium text-gray-900 mb-2">
-                                            {t('rate', language)}
-                                        </label>
-                                        <Input
-                                            id="post-rate"
-                                            type="number"
-                                            placeholder="12500"
-                                            value={rate}
-                                            onChange={(e) => setRate(e.target.value)}
-                                            className="w-full px-4 py-3 border border-gray-200 rounded-lg text-body bg-white"
-                                        />
-                                    </div>
-                                </div>
-
                                 <div>
-                                    <label htmlFor="post-location" className="block text-body font-medium text-gray-900 mb-2">
-                                        {t('place', language)}
+                                    <label className="block text-xs font-medium text-gray-500 mb-2">
+                                        Курс
                                     </label>
                                     <Input
-                                        id="post-location"
-                                        placeholder={t('enterPlace', language)}
-                                        value={location}
-                                        onChange={(e) => setLocation(e.target.value)}
-                                        className="w-full px-4 py-3 border border-gray-200 rounded-lg text-body bg-white"
+                                        type="text"
+                                        placeholder="50.5"
+                                        value={rate}
+                                        onChange={(e) => setRate(e.target.value)}
+                                        className="w-full px-4 py-3 border border-gray-200 rounded-xl"
                                     />
                                 </div>
+                            </div>
 
-                                <div>
-                                    <label htmlFor="post-image" className="block text-body font-medium text-gray-900 mb-2">
-                                        {t('imageUrl', language)}
-                                    </label>
-                                    <Input
-                                        id="post-image"
-                                        placeholder="https://..."
-                                        value={imageUrl}
-                                        onChange={(e) => setImageUrl(e.target.value)}
-                                        className="w-full px-4 py-3 border border-gray-200 rounded-lg text-body bg-white"
-                                    />
+                            {/* Location */}
+                            <div>
+                                <label className="block text-xs font-medium text-gray-500 mb-2">Район</label>
+                                <div className="flex flex-wrap gap-2">
+                                    {LOCATIONS.map((loc) => (
+                                        <button
+                                            key={loc}
+                                            onClick={() => setLocation(loc)}
+                                            className={cn(
+                                                "px-3 py-2 rounded-lg text-sm transition-all",
+                                                location === loc
+                                                    ? "bg-gray-900 text-white"
+                                                    : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                                            )}
+                                        >
+                                            {loc}
+                                        </button>
+                                    ))}
                                 </div>
+                            </div>
 
-                                <div>
-                                    <label htmlFor="post-description" className="block text-body font-medium text-gray-900 mb-2">
-                                        {t('description', language)}
-                                    </label>
-                                    <textarea
-                                        id="post-description"
-                                        placeholder={t('enterDescription', language)}
-                                        value={description}
-                                        onChange={(e) => setDescription(e.target.value)}
-                                        rows={3}
-                                        className="w-full px-4 py-3 border border-gray-200 rounded-lg text-body bg-white focus:outline-none focus-visible:ring-2 focus-visible:ring-black/20"
-                                    />
-                                </div>
-
-                                <div>
-                                    <label className="block text-body font-medium text-gray-900 mb-2">
-                                        {t('category', language)}
-                                    </label>
-                                    <SimpleSelect
-                                        options={CATEGORIES.map(c => ({ value: c, label: c }))}
-                                        value={category}
-                                        onChange={setCategory}
-                                        className="rounded-lg"
-                                    />
-                                </div>
-
-                                <div>
-                                    <label className="block text-body font-medium text-gray-900 mb-2">
-                                        {t('acceptedCurrencies', language)}
-                                    </label>
-                                    <div className="flex flex-wrap gap-2">
-                                        {CURRENCIES.map((currency) => (
-                                            <button
-                                                key={currency}
-                                                type="button"
-                                                onClick={() => toggleCurrency(currency)}
-                                                className={cn(
-                                                    'px-3 py-1.5 rounded-full text-caption font-medium transition-all',
-                                                    acceptedCurrencies.includes(currency)
-                                                        ? 'bg-black text-white'
-                                                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                                                )}
-                                            >
-                                                {currency}
-                                            </button>
-                                        ))}
-                                    </div>
-                                </div>
+                            {/* Description */}
+                            <div>
+                                <label className="block text-xs font-medium text-gray-500 mb-2">
+                                    {t('description', language)}
+                                </label>
+                                <textarea
+                                    placeholder="Описание..."
+                                    value={description}
+                                    onChange={(e) => setDescription(e.target.value)}
+                                    rows={3}
+                                    className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm resize-none focus:outline-none focus:ring-2 focus:ring-gray-200"
+                                />
                             </div>
                         </div>
 
                         {/* Footer */}
-                        <div className="p-4 border-t border-gray-200 bg-white rounded-b-lg">
+                        <div className="p-4 border-t border-gray-100">
                             <Button
-                                variant="primary"
                                 onClick={handleSubmit}
-                                disabled={!title.trim() || !amount || !rate || !location.trim()}
-                                className="w-full"
+                                disabled={!description.trim() || isSubmitting}
+                                className="w-full py-3 bg-gray-900 hover:bg-gray-800 text-white rounded-xl font-medium disabled:opacity-50"
                             >
-                                {t('saveChanges', language)}
+                                {isSubmitting ? <Loader2 className="animate-spin" size={18} /> : t('saveChanges', language)}
                             </Button>
                         </div>
                     </motion.div>
